@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { Pool } from "pg";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../generated/prisma/client";
 
@@ -8,15 +9,17 @@ if (!connectionString) {
   throw new Error("DATABASE_URL is not set.");
 }
 
+const pool = new Pool({ connectionString });
+// Prisma adapter types for pg.Pool conflict slightly in strict mode
+const adapter = new PrismaPg(pool as any);
+
 const globalForPrisma = globalThis as typeof globalThis & {
   prisma?: PrismaClient;
 };
 
 export const prisma =
   globalForPrisma.prisma ??
-  new PrismaClient({
-    adapter: new PrismaPg({ connectionString }),
-  });
+  new PrismaClient({ adapter });
 
 if (process.env.NODE_ENV !== "production") {
   globalForPrisma.prisma = prisma;
