@@ -67,7 +67,7 @@ export async function registerUser(formData: FormData) {
       });
     });
 
-    return { success: "Account created. Your wallet and starter workspace are ready." };
+    return { success: "Account created. Your wallet and starter board are ready." };
   } catch (error) {
     console.error("Registration error:", error);
     return { error: "Something went wrong. Please try again." };

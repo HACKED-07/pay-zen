@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { motion } from "framer-motion";
 import { FadeIn, SlideUp, StaggerContainer } from "@/components/motion-wrapper";
+import { BrandLogo } from "@/components/brand-logo";
 
 export function LandingHero() {
   return (
@@ -12,11 +13,7 @@ export function LandingHero() {
 
       {/* Header / Nav */}
       <header className="absolute top-0 left-0 w-full flex justify-between items-center p-8 md:px-16">
-        <div className="flex items-center gap-2 font-bold text-lg tracking-tight">
-          <div className="w-4 h-4 rounded-full bg-black"></div>
-          <div className="w-0 h-0 border-l-[8px] border-r-[8px] border-b-[14px] border-l-transparent border-r-transparent border-b-black"></div>
-          <span className="ml-2">PayZen</span>
-        </div>
+        <BrandLogo className="text-lg" imageClassName="w-[56px]" priority />
         <div className="flex flex-col gap-[6px] w-8 cursor-pointer">
           <div className="w-full h-[2px] bg-black"></div>
           <div className="w-2/3 h-[2px] bg-black"></div>
@@ -54,7 +51,7 @@ export function LandingHero() {
         <div className="w-full flex flex-col md:flex-row justify-between items-end mt-24 md:mt-32 relative">
           <SlideUp className="text-left max-w-[280px]">
             <p className="text-sm font-medium leading-relaxed">
-              PayZen turns group finance into a warm workspace: expenses, settlements, and notes all on one board.
+              Pay Zen turns group finance into a warm workspace: expenses, settlements, and notes all on one board.
             </p>
           </SlideUp>
 

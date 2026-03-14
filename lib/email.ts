@@ -13,12 +13,12 @@ export async function sendBudgetAlertEmail(
 
   try {
     await resend.emails.send({
-      from: "PayZen <onboarding@resend.dev>",
+      from: "Pay Zen <onboarding@resend.dev>",
       to: recipients,
       subject: `⚠️ ${groupName} — ${pct}% of monthly budget used`,
       html: `
         <div style="font-family: Inter, sans-serif; max-width: 480px; margin: 0 auto; background: #003249; color: #ccdbdc; padding: 32px; border-radius: 12px;">
-          <h2 style="margin: 0 0 8px; color: #80ced7;">PayZen Budget Alert</h2>
+          <h2 style="margin: 0 0 8px; color: #80ced7;">Pay Zen Budget Alert</h2>
           <p style="margin: 0 0 20px; font-size: 14px; color: #9ad1d4;">
             Your group <strong style="color: #fff;">${groupName}</strong> has reached
             <strong style="color: #ff5a6e;">${pct}%</strong> of its monthly limit.

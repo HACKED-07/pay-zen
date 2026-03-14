@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { acceptInvite } from "@/app/actions/invite";
+import { BrandLogo } from "@/components/brand-logo";
 
 export default function InviteClient({
   token,
@@ -44,6 +45,7 @@ export default function InviteClient({
 
       <section className="auth-paper__form">
         <div className="auth-card auth-card--paper auth-card--centered">
+          <BrandLogo className="mb-4" imageClassName="w-[58px]" priority />
           <p className="auth-card__eyebrow">Invite</p>
           <h2>Join {groupName}</h2>
           <p className="auth-card__copy">

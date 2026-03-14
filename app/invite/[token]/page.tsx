@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import Link from "next/link";
 import InviteClient from "./invite-client";
+import { BrandLogo } from "@/components/brand-logo";
 
 export default async function InvitePage({
   params,
@@ -28,6 +29,7 @@ export default async function InvitePage({
 
         <section className="auth-paper__form">
           <div className="auth-card auth-card--paper auth-card--centered">
+            <BrandLogo className="mb-4" imageClassName="w-[58px]" priority />
             <h2 className="text-2xl font-bold text-[var(--text-strong)]">
               Invalid or Expired Invite
             </h2>
@@ -36,7 +38,7 @@ export default async function InvitePage({
               one.
             </p>
             <Link href="/" className="primary-button inline-flex">
-              Go to PayZen
+              Go to Pay Zen
             </Link>
           </div>
         </section>

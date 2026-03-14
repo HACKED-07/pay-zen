@@ -33,12 +33,18 @@ export async function scanBill(base64Image: string): Promise<ScanResult> {
             {
               parts: [
                 {
-                  text: `Analyze this receipt/bill image. Extract the following information and return ONLY a valid JSON object with no markdown formatting, no code fences, no extra text:
+                  text: `Analyze this receipt/bill image. Your task is to extract every line item (food/drinks/products) and their total prices.
+Guidelines:
+1. Extract the exact name as printed.
+2. For the 'amount' of a line item, use the total price for that row (quantity * rate).
+3. If there are taxes or service charges, list them as separate items.
+4. "amount" should be the grand total of the bill.
+Return ONLY a valid JSON object with no markdown formatting, no code fences, no extra text:
 {
-  "description": "A short 3-6 word description of what the bill is for (e.g. 'Dinner at Pizza Hut', 'Grocery shopping', 'Uber ride')",
+  "description": "A short 3-6 word description of what the bill is for (e.g. 'Dinner at Pizza Hut', 'Grocery shopping')",
   "amount": <total amount as a number, no currency symbols>,
   "currency": "INR or USD or the currency shown",
-  "items": [{"name": "item name", "amount": <number>}]
+  "items": [{"name": "item name", "amount": <total line item amount as number>}]
 }
 If you cannot read the image or it's not a receipt, return:
 {"description": "", "amount": 0, "currency": "INR", "items": [], "error": "Could not read bill"}`,

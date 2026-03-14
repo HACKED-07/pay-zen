@@ -3,6 +3,7 @@
 import Image from "next/image";
 import { useState, useTransition, useRef, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { signOut } from "next-auth/react";
 import { motion, AnimatePresence } from "framer-motion";
 import { StaggerContainer, SlideUp } from "@/components/motion-wrapper";
 import { ExpenseCategory, SplitMethod } from "@/generated/prisma/enums";
@@ -355,14 +356,14 @@ function LineChart({ points, currencyCode = "INR", rate = 1 }: { points: Analyti
   // Area fill path
   const areaPath = points.length > 0
     ? `M 0,${height} ` +
-      points
-        .map((point, index) => {
-          const x = index * stepX;
-          const y = height - (point.amount / max) * (height - 30) - 10;
-          return `L ${x},${y}`;
-        })
-        .join(" ") +
-      ` L ${(points.length - 1) * stepX},${height} Z`
+    points
+      .map((point, index) => {
+        const x = index * stepX;
+        const y = height - (point.amount / max) * (height - 30) - 10;
+        return `L ${x},${y}`;
+      })
+      .join(" ") +
+    ` L ${(points.length - 1) * stepX},${height} Z`
     : "";
 
   return (
@@ -475,7 +476,7 @@ function MoneyFlowDiagram({
     <div className="flex flex-col gap-4 w-full">
       {related.map((transaction, index) => (
         <div className="flex items-center p-4 bg-white border-2 border-black rounded-[2rem] shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] w-full gap-3 overflow-hidden" key={`${transaction.fromUserId}-${transaction.toUserId}-${index}`}>
-          
+
           {/* Sender */}
           <div className="flex items-center gap-3 shrink-1 min-w-0 max-w-[35%]">
             <div className="w-10 h-10 shrink-0 rounded-full flex items-center justify-center font-bold text-sm bg-white border-2 border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] text-black relative z-10">
@@ -486,13 +487,13 @@ function MoneyFlowDiagram({
 
           {/* Dotted Line Background Connector + Amount */}
           <div className="flex-1 relative flex items-center justify-center shrink-0 min-w-[80px]">
-             {/* The dotted line spanning the remaining space */}
-             <div className="absolute left-0 right-0 top-1/2 h-[2px] border-t-2 border-dashed border-gray-300 z-0 pointer-events-none" />
-             {/* The Amount Badge (centered over line) */}
-             <div className="relative z-20 bg-[#D4F670] border-2 border-black rounded-full px-3 py-1 font-black text-xs sm:text-sm shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] text-black flex items-center gap-1 group">
-                <span>{formatCurrency(transaction.amount, currencyCode, rate)}</span>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="opacity-60 ml-1"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
-             </div>
+            {/* The dotted line spanning the remaining space */}
+            <div className="absolute left-0 right-0 top-1/2 h-[2px] border-t-2 border-dashed border-gray-300 z-0 pointer-events-none" />
+            {/* The Amount Badge (centered over line) */}
+            <div className="relative z-20 bg-[#D4F670] border-2 border-black rounded-full px-3 py-1 font-black text-xs sm:text-sm shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] text-black flex items-center gap-1 group">
+              <span>{formatCurrency(transaction.amount, currencyCode, rate)}</span>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="opacity-60 ml-1"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+            </div>
           </div>
 
           {/* Receiver */}
@@ -557,10 +558,14 @@ export function DashboardClient({ data }: { data: DashboardData }) {
   const [inviteLink, setInviteLink] = useState("");
   const [budgetInput, setBudgetInput] = useState("");
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const expenseComposerRef = useRef<HTMLDivElement>(null);
   const [scanning, setScanning] = useState(false);
   const [recording, setRecording] = useState(false);
   const [voiceTranscript, setVoiceTranscript] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const recognitionRef = useRef<any>(null);
+  const voiceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [toasts, setToasts] = useState<{ id: number; text: string; type: "info" | "error" | "success" }[]>([]);
   const toastIdRef = useRef(0);
   const showToast = useCallback((text: string, type: "info" | "error" | "success" = "info") => {
@@ -574,6 +579,10 @@ export function DashboardClient({ data }: { data: DashboardData }) {
   // ── Currency state ──
   const [currencyCode, setCurrencyCode] = useState("INR");
   const [exchangeRate, setExchangeRate] = useState(1);
+
+  // ── AI Itemized Split state ──
+  type ScannedItem = { id: string; name: string; amount: number; assignedToUserId: string | 'SHARED' | null };
+  const [scannedItems, setScannedItems] = useState<ScannedItem[]>([]);
 
   useEffect(() => {
     if (currencyCode === "INR") {
@@ -629,6 +638,36 @@ export function DashboardClient({ data }: { data: DashboardData }) {
       });
     }
   }, [section, activeGroup, notesLoaded]);
+
+  // Recalculate CUSTOM split values whenever scannedItems assignments change
+  useEffect(() => {
+    if (scannedItems.length === 0 || splitMethod !== "CUSTOM") return;
+    
+    const newSplitValues: Record<string, string> = {};
+    let totalAssigned = 0;
+    let sharedPool = 0;
+
+    scannedItems.forEach(item => {
+      if (item.assignedToUserId === "SHARED") {
+        sharedPool += item.amount;
+        totalAssigned += item.amount;
+      } else if (item.assignedToUserId) {
+        const currentAmount = Number(newSplitValues[item.assignedToUserId] || 0);
+        newSplitValues[item.assignedToUserId] = (currentAmount + item.amount).toString();
+        totalAssigned += item.amount;
+      }
+    });
+
+    if (sharedPool > 0 && selectedMembers.size > 0) {
+      const splitShare = sharedPool / selectedMembers.size;
+      selectedMembers.forEach(memberId => {
+        const currentAmount = Number(newSplitValues[memberId] || 0);
+        newSplitValues[memberId] = (currentAmount + splitShare).toString();
+      });
+    }
+
+    setSplitValues(newSplitValues);
+  }, [scannedItems, splitMethod, expenseState.amount, selectedMembers]);
 
   useEffect(() => { setNotesLoaded(false); setNotes([]); setInviteLink(""); }, [selectedGroupId]);
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [chatMessages]);
@@ -705,7 +744,7 @@ export function DashboardClient({ data }: { data: DashboardData }) {
       category: expenseToEdit.category,
     });
     setSplitMethod(expenseToEdit.splitMethod as SplitMethod);
-    
+
     const newSplitValues: Record<string, string> = {};
     expenseToEdit.splits.forEach(s => {
       if (expenseToEdit.splitMethod === "PERCENT" && s.percentage !== null) {
@@ -716,10 +755,10 @@ export function DashboardClient({ data }: { data: DashboardData }) {
     });
     setSplitValues(newSplitValues);
     setSection("dashboard");
-    
+
     const involvedUsers = new Set(expenseToEdit.splits.map(s => s.userId));
     setSelectedMembers(involvedUsers);
-    
+
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -750,7 +789,7 @@ export function DashboardClient({ data }: { data: DashboardData }) {
       if (result.token) {
         const url = `${window.location.origin}/invite/${result.token}`;
         setInviteLink(url);
-        navigator.clipboard.writeText(url).then(() => showToast("Invite link copied!", "success")).catch(() => {});
+        navigator.clipboard.writeText(url).then(() => showToast("Invite link copied!", "success")).catch(() => { });
       }
     });
   }
@@ -775,6 +814,13 @@ export function DashboardClient({ data }: { data: DashboardData }) {
       return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
     }
     return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+  }
+
+  function scrollToExpenseComposer() {
+    expenseComposerRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
   }
 
   const focusedExplainability =
@@ -846,12 +892,12 @@ export function DashboardClient({ data }: { data: DashboardData }) {
           body: JSON.stringify({ amount }),
         });
         const resData = await response.json();
-        
+
         if (!response.ok) {
           showToast(resData.error ?? "Withdrawal failed.", "error");
           return;
         }
-        
+
         showToast("Withdrawal successful!", "success");
         setWithdrawAmount("");
         router.refresh();
@@ -900,6 +946,7 @@ export function DashboardClient({ data }: { data: DashboardData }) {
       });
       setSplitMethod("EQUAL");
       setSplitValues({});
+      setScannedItems([]);
       setEditingExpenseId(null);
       showToast(editingExpenseId ? "Expense updated." : "Expense locked in.", "success");
       router.refresh();
@@ -927,7 +974,19 @@ export function DashboardClient({ data }: { data: DashboardData }) {
           description: result.description || current.description,
           amount: result.amount ? String(result.amount) : current.amount,
         }));
-        showToast("Receipt scanned — fields auto-filled.", "success");
+        
+        if (result.items && result.items.length > 0) {
+          setScannedItems(result.items.map((item: any, i: number) => ({
+            id: `item-${i}-${Date.now()}`,
+            name: item.name,
+            amount: Number(item.amount) || 0,
+            assignedToUserId: null
+          })));
+          setSplitMethod("EQUAL"); // default to EQUAL as requested
+          showToast("Receipt scanned! Switch to 'Exact' split to assign items.", "success");
+        } else {
+          showToast("Receipt scanned — fields auto-filled.", "success");
+        }
       }
     } catch {
       showToast("Failed to process receipt.", "error");
@@ -937,6 +996,12 @@ export function DashboardClient({ data }: { data: DashboardData }) {
   }
 
   function startVoiceRecording() {
+    if (recording && recognitionRef.current) {
+      recognitionRef.current.stop();
+      if (voiceTimeoutRef.current) clearTimeout(voiceTimeoutRef.current);
+      return;
+    }
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const SpeechRecognition = (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
@@ -948,33 +1013,53 @@ export function DashboardClient({ data }: { data: DashboardData }) {
     recognition.lang = "en-IN";
     recognition.interimResults = true;
     recognition.maxAlternatives = 1;
-    recognition.continuous = false;
+    recognition.continuous = true;
+    recognitionRef.current = recognition;
 
     setRecording(true);
     setVoiceTranscript("");
-    ;
+
+    let finalTranscript = "";
+
+    const resetSilenceTimeout = () => {
+      if (voiceTimeoutRef.current) clearTimeout(voiceTimeoutRef.current);
+      voiceTimeoutRef.current = setTimeout(() => {
+        if (recognitionRef.current) {
+          recognitionRef.current.stop();
+        }
+      }, 5000); // Wait 5 seconds of total silence before auto-stopping
+    };
+
+    // start the initial timeout
+    resetSilenceTimeout();
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     recognition.onresult = (event: any) => {
-      const result = event.results[event.results.length - 1];
-      const transcript = result[0].transcript;
-      setVoiceTranscript(transcript);
-
-      if (result.isFinal) {
-        setRecording(false);
-        processVoiceResult(transcript);
+      resetSilenceTimeout();
+      let interimTranscript = "";
+      for (let i = event.resultIndex; i < event.results.length; ++i) {
+        if (event.results[i].isFinal) {
+          finalTranscript += event.results[i][0].transcript + " ";
+        } else {
+          interimTranscript += event.results[i][0].transcript;
+        }
       }
+      setVoiceTranscript(finalTranscript + interimTranscript);
     };
 
     recognition.onerror = () => {
+      if (voiceTimeoutRef.current) clearTimeout(voiceTimeoutRef.current);
       setRecording(false);
       setVoiceTranscript("");
       showToast("Voice recognition failed. Try again.", "error");
     };
 
     recognition.onend = () => {
-      // only reset if still in recording state (not already processed)
+      if (voiceTimeoutRef.current) clearTimeout(voiceTimeoutRef.current);
       setRecording(false);
+      if (finalTranscript.trim()) {
+        processVoiceResult(finalTranscript.trim());
+      }
     };
 
     recognition.start();
@@ -1017,7 +1102,7 @@ export function DashboardClient({ data }: { data: DashboardData }) {
       } else {
         setSplitMethod("EQUAL");
         setSplitValues({});
-        
+
         // If splits array has names for an equal split, select just those members
         if (result.splits && result.splits.length > 0) {
           const newSelected = new Set<string>();
@@ -1141,50 +1226,51 @@ export function DashboardClient({ data }: { data: DashboardData }) {
     });
   }
 
-  const overviewCards = [
-    { label: "Wallet pocket", value: displayCurrency(data.walletBalance), accent: true },
-    {
-      label: "Group spend",
-      value: displayCurrency(activeGroup?.totalExpenseAmount ?? 0),
-      accent: false,
-    },
-    { label: "Circles joined", value: String(data.groups.length), accent: false },
-    {
-      label: "Clean-up moves",
-      value: String(activeGroup?.suggestions.length ?? 0),
-      accent: false,
-    },
-  ];
   const currentSection = sections.find((item) => item.key === section) ?? sections[0];
   const quickAccessSections = sections.filter((item) => item.key !== section);
+  const nextSuggestion = activeGroup?.suggestions[0] ?? null;
+  const totalSuggestedAmount = activeGroup?.suggestions.reduce(
+    (sum, suggestion) => sum + suggestion.amount,
+    0,
+  ) ?? 0;
+  const latestExpense = activeGroup?.expenses[0] ?? null;
+  const topSpender = activeGroup?.analytics.topSpenders[0] ?? null;
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-8">
       {/* ── Top Horizontal Navigation ── */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-4 rounded-xl border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] z-10">
-        
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-5 bg-white px-5 py-4 rounded-xl border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] z-10">
+
         {/* Group Selector */}
         <div className="flex items-center gap-3 shrink-0">
           <span className="font-bold uppercase tracking-wider text-xs whitespace-nowrap">Active Group:</span>
-          <select 
-            className="bg-[#fdfdf9] border-2 border-black rounded-lg px-3 py-2 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-[#D4F670]"
-            value={selectedGroupId ?? ""}
-            onChange={(e) => {
-              setSelectedGroupId(e.target.value);
-              setFocusedFlowUserId(data.userId);
-            }}
-          >
-            {data.groups.length === 0 && (
-              <option value="" disabled>No groups yet</option>
-            )}
-            {data.groups.map(g => (
-              <option key={g.id} value={g.id}>{g.name}</option>
-            ))}
-          </select>
+          <div className="relative flex items-center bg-[#fdfdf9] border-2 border-black rounded-lg shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:bg-[#f6f6f6] transition-colors focus-within:ring-2 focus-within:ring-[#D4F670]">
+            <select
+              className="appearance-none outline-none bg-transparent pl-3 pr-8 py-2 text-sm font-bold cursor-pointer w-full h-full"
+              style={{ WebkitAppearance: 'none', MozAppearance: 'none' }}
+              value={selectedGroupId ?? ""}
+              onChange={(e) => {
+                setSelectedGroupId(e.target.value);
+                setFocusedFlowUserId(data.userId);
+              }}
+            >
+              {data.groups.length === 0 && (
+                <option value="" disabled>No groups yet</option>
+              )}
+              {data.groups.map(g => (
+                <option key={g.id} value={g.id}>{g.name}</option>
+              ))}
+            </select>
+            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-black">
+              <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
+                <path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z" />
+              </svg>
+            </div>
+          </div>
         </div>
 
         {/* Section Navigation Tabs */}
-        <div className="flex bg-[#f6f6f6] p-1.5 rounded-lg border-2 border-black overflow-x-auto hide-scrollbars">
+        <div className="hidden lg:flex bg-[#f6f6f6] p-1.5 rounded-lg border-2 border-black overflow-x-auto hide-scrollbars">
           <AnimatePresence>
             {sections.map((item) => {
               const Icon = sectionIcons[item.key];
@@ -1193,9 +1279,8 @@ export function DashboardClient({ data }: { data: DashboardData }) {
                 <button
                   key={item.key}
                   onClick={() => setSection(item.key)}
-                  className={`relative flex items-center gap-2 px-4 py-2 text-sm font-bold rounded-md transition-colors whitespace-nowrap ${
-                    isActive ? "text-black" : "text-gray-500 hover:text-black"
-                  }`}
+                  className={`relative flex items-center gap-2 px-4 py-2 text-sm font-bold rounded-md transition-colors whitespace-nowrap ${isActive ? "text-black" : "text-gray-500 hover:text-black"
+                    }`}
                 >
                   {isActive && (
                     <motion.div
@@ -1214,25 +1299,36 @@ export function DashboardClient({ data }: { data: DashboardData }) {
           </AnimatePresence>
         </div>
 
-        {/* Currency Selector */}
-        <div className="flex items-center shrink-0 relative">
-          <select
-            value={currencyCode}
-            onChange={e => setCurrencyCode(e.target.value)}
-            className="appearance-none bg-white border-2 border-black rounded-lg pl-3 pr-8 py-2 text-sm font-bold shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] focus:outline-none focus:ring-2 focus:ring-[#D4F670] cursor-pointer hover:bg-[#f6f6f6] transition-colors"
-          >
-            <option value="INR">INR ₹</option>
-            <option value="USD">USD $</option>
-            <option value="EUR">EUR €</option>
-            <option value="GBP">GBP £</option>
-            <option value="JPY">JPY ¥</option>
-            <option value="AED">AED د.إ</option>
-          </select>
-          <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-black">
-            <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
-              <path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z" />
-            </svg>
+        {/* Currency Selector & Actions */}
+        <div className="flex items-center shrink-0 gap-3">
+          <div className="relative flex items-center bg-white border-2 border-black rounded-lg shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:bg-[#f6f6f6] transition-colors focus-within:ring-2 focus-within:ring-[#D4F670]">
+            <select
+              value={currencyCode}
+              onChange={e => setCurrencyCode(e.target.value)}
+              className="appearance-none outline-none bg-transparent pl-3 pr-8 py-2 text-sm font-bold cursor-pointer w-full h-full"
+              style={{ WebkitAppearance: 'none', MozAppearance: 'none' }}
+            >
+              <option value="INR">INR ₹</option>
+              <option value="USD">USD $</option>
+              <option value="EUR">EUR €</option>
+              <option value="GBP">GBP £</option>
+              <option value="JPY">JPY ¥</option>
+              <option value="AED">AED د.إ</option>
+            </select>
+            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-black">
+              <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
+                <path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z" />
+              </svg>
+            </div>
           </div>
+          
+          <button
+            onClick={() => signOut({ callbackUrl: "/" })}
+            className="px-4 py-2 text-sm font-bold bg-[#fdfdf9] border-2 border-black rounded-lg shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:bg-[#ffcccb] transition-colors text-black whitespace-nowrap"
+            title="Log out"
+          >
+            Leave desk
+          </button>
         </div>
       </div>
 
@@ -1240,11 +1336,11 @@ export function DashboardClient({ data }: { data: DashboardData }) {
         {/* Custom Confirm Modal */}
         <AnimatePresence>
           {confirmExitGroupId && (
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
             >
-              <motion.div 
+              <motion.div
                 initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }}
                 className="bg-white p-6 rounded-2xl border border-black shadow-2xl max-w-sm w-full"
               >
@@ -1256,14 +1352,14 @@ export function DashboardClient({ data }: { data: DashboardData }) {
                   Are you sure you want to exit this group? You will lose access to its ledger and history.
                 </p>
                 <div className="flex justify-end gap-3">
-                  <button 
+                  <button
                     type="button"
                     className="px-4 py-2 rounded-xl text-sm font-bold text-black bg-[#f6f6f6] hover:bg-[var(--border)] transition-colors"
                     onClick={() => setConfirmExitGroupId(null)}
                   >
                     Cancel
                   </button>
-                  <button 
+                  <button
                     type="button"
                     className="px-4 py-2 rounded-xl text-sm font-bold bg-[var(--danger)] text-white hover:opacity-90 transition-opacity shadow-lg shadow-red-500/20"
                     onClick={() => {
@@ -1288,13 +1384,12 @@ export function DashboardClient({ data }: { data: DashboardData }) {
             </div>
           ))}
         </div>
-
         {/* ── Onboarding CTA: shown when user has zero groups ── */}
         {data.groups.length === 0 ? (
-          <div className="section-animate" style={{ marginTop: "0.5rem" }}>
-            <div className="bg-[#fdfdf9] border-2 border-dashed border-black rounded-xl p-8 text-center flex flex-col items-center justify-center shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+          <div className="section-animate mt-8">
+            <div className="bg-[#fdfdf9] border-2 border-black rounded-xl p-8 mb-8 text-center flex flex-col items-center justify-center shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
               <div className="w-16 h-16 bg-[#D4F670] rounded-xl border-2 border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] flex items-center justify-center mb-4">
-                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#D4F670" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#000" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
                   <circle cx="9" cy="7" r="4" />
                   <line x1="19" y1="8" x2="19" y2="14" />
@@ -1302,53 +1397,60 @@ export function DashboardClient({ data }: { data: DashboardData }) {
                 </svg>
               </div>
               <h2 className="text-2xl font-black text-black tracking-tight mb-2">Your Groups</h2>
-              <p className="text-gray-600 max-w-sm mx-auto">
+              <p className="text-gray-600 max-w-sm mx-auto font-medium">
                 Create a new group or join one with an invite code to start tracking expenses.
               </p>
             </div>
-            <div className="onboarding-forms">
-              <div className="onboarding-form-card">
-                <h3>Create New</h3>
-                <p>Start a new shared ledger.</p>
-                <div className="space-y-3">
+            <div className="grid md:grid-cols-2 gap-8">
+              <div className="bg-white border-2 border-black rounded-xl p-6 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] flex flex-col hover:-translate-y-1 transition-transform">
+                <h3 className="text-xl font-black text-black mb-2">Create New</h3>
+                <p className="text-gray-600 text-sm font-medium mb-6">Start a new shared ledger.</p>
+                <div className="space-y-4 flex-grow flex flex-col justify-end">
                   <div className="field">
-                    <label htmlFor="ob-name">Group name</label>
+                    <label htmlFor="ob-name" className="text-sm font-bold text-black uppercase tracking-wider">Group name</label>
                     <input
                       id="ob-name"
                       value={groupState.name}
                       onChange={(e) => setGroupState((s) => ({ ...s, name: e.target.value }))}
                       placeholder="Bangalore flat"
+                      className="w-full px-3 py-2 bg-[#fdfdf9] border-2 border-black rounded-lg focus:outline-none focus:ring-4 focus:ring-[#D4F670]/50 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-shadow"
                     />
                   </div>
                   <div className="field">
-                    <label htmlFor="ob-desc">Description</label>
+                    <label htmlFor="ob-desc" className="text-sm font-bold text-black uppercase tracking-wider">Description</label>
                     <input
                       id="ob-desc"
                       value={groupState.description}
                       onChange={(e) => setGroupState((s) => ({ ...s, description: e.target.value }))}
                       placeholder="Rent, groceries, utilities"
+                      className="w-full px-3 py-2 bg-[#fdfdf9] border-2 border-black rounded-lg focus:outline-none focus:ring-4 focus:ring-[#D4F670]/50 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-shadow"
                     />
                   </div>
-                  <button className="flex bg-black text-white font-bold rounded-lg border-2 border-black hover:bg-[#D4F670] hover:text-black transition-colors shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] items-center gap-2 px-4 py-2 w-full justify-center" onClick={createNewGroup} disabled={pending} type="button">
-                    {pending ? <><span className="spinner" /> Creating…</> : "Create group"}
+                  <button className="flex bg-black text-white font-black text-lg py-3 rounded-xl border-2 border-black hover:bg-[#D4F670] hover:text-black transition-colors shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] justify-center items-center mt-2 group relative overflow-hidden" onClick={createNewGroup} disabled={pending} type="button">
+                    <span className="relative z-10 flex items-center gap-2">
+                       {pending ? <><span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin group-hover:border-black group-hover:border-t-transparent" /> Creating…</> : "Create group"}
+                    </span>
                   </button>
                 </div>
               </div>
-              <div className="onboarding-form-card">
-                <h3>Join Group</h3>
-                <p>Enter an invite code.</p>
-                <div className="space-y-3">
-                  <div className="field">
-                    <label htmlFor="ob-code">Invite code</label>
+              <div className="bg-white border-2 border-black rounded-xl p-6 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] flex flex-col hover:-translate-y-1 transition-transform">
+                <h3 className="text-xl font-black text-black mb-2">Join Group</h3>
+                <p className="text-gray-600 text-sm font-medium mb-6">Enter an invite code.</p>
+                <div className="space-y-4 flex-grow flex flex-col justify-end">
+                  <div className="field flex-grow">
+                    <label htmlFor="ob-code" className="text-sm font-bold text-black uppercase tracking-wider">Invite code</label>
                     <input
                       id="ob-code"
                       value={groupState.inviteCode}
                       onChange={(e) => setGroupState((s) => ({ ...s, inviteCode: e.target.value }))}
                       placeholder="AB12CD34"
+                      className="w-full px-3 py-2 bg-[#fdfdf9] border-2 border-black rounded-lg focus:outline-none focus:ring-4 focus:ring-[#D4F670]/50 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-shadow uppercase font-mono tracking-widest"
                     />
                   </div>
-                  <button className="flex bg-white text-black font-bold rounded-lg border-2 border-black hover:bg-[#D4F670] transition-colors shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] items-center gap-2 px-4 py-2 w-full justify-center" onClick={joinExistingGroup} disabled={pending} type="button">
-                    {pending ? <><span className="spinner" /> Joining…</> : "Join group"}
+                  <button className="flex bg-white text-black font-black text-lg py-3 rounded-xl border-2 border-black hover:bg-[#f6f6f6] transition-colors shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] justify-center items-center mt-2 group relative overflow-hidden" onClick={joinExistingGroup} disabled={pending} type="button">
+                    <span className="relative z-10 flex items-center gap-2">
+                      {pending ? <><span className="w-4 h-4 border-2 border-black border-t-transparent rounded-full animate-spin" /> Joining…</> : "Join group"}
+                    </span>
                   </button>
                 </div>
               </div>
@@ -1370,7 +1472,7 @@ export function DashboardClient({ data }: { data: DashboardData }) {
                   </button>
                 </div>
               </article>
-              
+
               <article className="bg-white border-2 border-black rounded-xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] p-6">
                 <div className="mb-5">
                   <p className="text-xs font-bold uppercase tracking-widest text-[#93c713] mb-3 relative inline-block">Wallet withdrawal</p>
@@ -1400,7 +1502,7 @@ export function DashboardClient({ data }: { data: DashboardData }) {
         ) : (
           <>
             {/* ── Hero + Metrics: shown when groups exist ── */}
-            <section className="bg-white border-2 border-black rounded-xl p-6 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] flex flex-col md:flex-row gap-6 relative overflow-hidden">
+            <section className="bg-white border-2 border-black rounded-xl px-6 py-7 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] flex flex-col md:flex-row gap-8 relative overflow-hidden">
               {/* Decorative Circle */}
               <div className="absolute top-0 right-0 w-48 h-48 bg-[#D4F670]/20 rounded-full -translate-y-1/2 translate-x-1/2 pointer-events-none" />
               <div className="flex-1 z-10">
@@ -1415,8 +1517,26 @@ export function DashboardClient({ data }: { data: DashboardData }) {
                     ? `${activeGroup.members.length} members · ${displayCurrency(activeGroup.totalExpenseAmount)} total`
                     : "Select a group to view details."}
                 </p>
+                {section === "dashboard" ? (
+                  <div className="mt-4 flex flex-wrap gap-3">
+                    <button
+                      type="button"
+                      onClick={scrollToExpenseComposer}
+                      className="px-4 py-3 bg-black text-white font-bold rounded-xl border-2 border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:bg-[#D4F670] hover:text-black transition-colors"
+                    >
+                      Add expense
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSection("settlements")}
+                      className="px-4 py-3 bg-white text-black font-bold rounded-xl border-2 border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:bg-[#f6f6f6] transition-colors"
+                    >
+                      Review settlements
+                    </button>
+                  </div>
+                ) : null}
               </div>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 w-full">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 w-full md:max-w-3xl">
                 <div className="bg-white border-2 border-black rounded-lg p-3 hover:bg-[#f6f6f6] transition-colors shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
                   <span>Active group</span>
                   <strong className="block mt-1 text-lg text-black">{activeGroup?.name ?? "—"}</strong>
@@ -1429,384 +1549,623 @@ export function DashboardClient({ data }: { data: DashboardData }) {
                   <span>Due to settle</span>
                   <strong className="block mt-1 text-lg text-[#65a30d]">{activeGroup?.suggestions.length ?? 0} txns</strong>
                 </div>
-                <div className="bg-white border-2 border-black rounded-lg p-3 hover:bg-[#f6f6f6] transition-colors shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] mt-auto pt-2 hidden sm:block">
-                  <button type="button" onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (activeGroup) { handleExitGroupInit(activeGroup.id); } }} className="text-xs font-bold text-red-600 hover:underline opacity-80 hover:opacity-100 transition-opacity uppercase tracking-wider">
-                    Exit Group
-                  </button>
-                </div>
               </div>
             </section>
 
-            <div className="grid gap-3 xl:grid-cols-4">
-              {overviewCards.map((card) => (
-                <article className="bg-white border-2 border-black rounded-xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] p-6 flex flex-col justify-center min-h-[120px]" key={card.label}>
-                  <p>{card.label}</p>
-                  <h3 style={card.accent ? { color: "#D4F670" } : undefined}>
-                    {card.value}
+            <div className="grid gap-6 xl:grid-cols-[1.2fr_1fr_1fr] my-10">
+              <article className="bg-[#fdfdf9] border-2 border-black rounded-xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] p-6 flex flex-col gap-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-widest text-[#93c713]">Next action</p>
+                    <h3 className="mt-2 text-2xl font-black text-black tracking-tight">
+                      {nextSuggestion ? "Clear the next settlement" : "You&apos;re caught up"}
+                    </h3>
+                  </div>
+                  <span className="px-3 py-1 rounded-full border-2 border-black text-xs font-bold uppercase tracking-wider bg-white">
+                    {activeGroup?.suggestions.length ?? 0} pending
+                  </span>
+                </div>
+
+                {nextSuggestion ? (
+                  <>
+                    <div className="rounded-xl border-2 border-black bg-white p-5 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
+                      <p className="text-sm text-gray-600">Recommended transfer</p>
+                      <strong className="mt-1 block text-xl text-black">
+                        {nextSuggestion.fromName} pays {nextSuggestion.toName}
+                      </strong>
+                      <p className="mt-2 text-3xl font-black text-[#65a30d]">
+                        {displayCurrency(nextSuggestion.amount)}
+                      </p>
+                    </div>
+                    <div className="flex flex-col sm:flex-row gap-4 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => setSection("settlements")}
+                        className="px-4 py-3 bg-black text-white font-bold rounded-xl border-2 border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:bg-[#D4F670] hover:text-black transition-colors"
+                      >
+                        Open settlements
+                      </button>
+                      <p className="text-sm text-gray-600 self-center">
+                        {activeGroup?.suggestions.length ?? 0} transfers add up to {displayCurrency(totalSuggestedAmount)}.
+                      </p>
+                    </div>
+                  </>
+                ) : (
+                  <div className="rounded-xl border-2 border-dashed border-black bg-white p-4 text-sm text-gray-600">
+                    No suggested transfers right now. Your balances look clean, so you can move on to expenses, notes, or invites.
+                  </div>
+                )}
+              </article>
+
+              <article className="bg-white border-2 border-black rounded-xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] p-6 flex flex-col gap-5">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-widest text-[#93c713]">Latest activity</p>
+                  <h3 className="mt-2 text-xl font-black text-black tracking-tight">
+                    {latestExpense ? latestExpense.description : "No expense yet"}
                   </h3>
-                </article>
-              ))}
-            </div>
-            <div className="hidden">
-              {/* quickAccessSections removed per user request */}
+                </div>
+
+                {latestExpense ? (
+                  <>
+                    <div className="space-y-2 text-sm text-gray-600">
+                      <p>
+                        Paid by <strong className="text-black">{latestExpense.payerName}</strong>
+                      </p>
+                      <p>{formatDate(latestExpense.date)}</p>
+                      <p className="uppercase tracking-wider">
+                        {latestExpense.category.replaceAll("_", " ")}
+                      </p>
+                    </div>
+                    <p className="text-3xl font-black text-black">
+                      {displayCurrency(latestExpense.amount)}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setSection("activity")}
+                      className="mt-auto px-4 py-3 bg-[#f6f6f6] text-black font-bold rounded-xl border-2 border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:bg-[#D4F670] transition-colors"
+                    >
+                      View ledger
+                    </button>
+                  </>
+                ) : (
+                  <div className="rounded-xl border-2 border-dashed border-black bg-[#fdfdf9] p-4 text-sm text-gray-600">
+                    Add the first expense for this group to start building the ledger.
+                  </div>
+                )}
+              </article>
+
+              <article className="bg-white border-2 border-black rounded-xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] p-6 flex flex-col gap-5">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-widest text-[#93c713]">Quick jump</p>
+                  <h3 className="mt-2 text-xl font-black text-black tracking-tight">Go where work is waiting</h3>
+                </div>
+
+                <div className="grid gap-4">
+                  {quickAccessSections
+                    .filter((item) => ["settlements", "activity", "whiteboard"].includes(item.key))
+                    .map((item) => (
+                      <button
+                        key={item.key}
+                        type="button"
+                        onClick={() => setSection(item.key)}
+                        className="text-left rounded-xl border-2 border-black bg-[#fdfdf9] px-4 py-3 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:bg-[#D4F670] transition-colors"
+                      >
+                        <strong className="block text-black">{item.label}</strong>
+                        <span className="block text-sm text-gray-600">{item.subtitle}</span>
+                      </button>
+                    ))}
+                </div>
+
+                <div className="mt-auto rounded-xl border-2 border-black bg-[#fdfdf9] p-4">
+                  <p className="text-sm text-gray-600">Top spender this cycle</p>
+                  <strong className="mt-1 block text-lg text-black">
+                    {topSpender ? topSpender.name : "No spending yet"}
+                  </strong>
+                  <p className="mt-1 text-2xl font-black text-[#65a30d]">
+                    {topSpender ? displayCurrency(topSpender.amount) : displayCurrency(0)}
+                  </p>
+                </div>
+              </article>
             </div>
           </>
         )}
 
         <AnimatePresence mode="popLayout">
           {data.groups.length > 0 && section === "dashboard" ? (
-            <StaggerContainer key="dashboard" className="grid gap-6 xl:grid-cols-[1fr_1fr] w-full">
+            <StaggerContainer key="dashboard" className="flex flex-col-reverse xl:grid items-start gap-8 xl:grid-cols-[0.92fr_1.08fr] w-full">
               <SlideUp className="bg-[#fdfdf9] border-2 border-black rounded-xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] p-6 space-y-6">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <h2 className="text-xl font-bold tracking-tight text-black flex items-center gap-2">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-[#65a30d]"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
-                    {activeGroup?.name ?? "No group selected"}
-                  </h2>
-                  <p className="mt-1 text-sm text-gray-500">
-                    {activeGroup?.description ?? "Create or join a group."}
-                  </p>
+                <div className="flex items-start justify-between gap-5">
+                  <div>
+                    <h2 className="text-xl font-bold tracking-tight text-black flex items-center gap-2">
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-[#65a30d]"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+                      {activeGroup?.name ?? "No group selected"}
+                    </h2>
+                    <p className="mt-1 text-sm text-gray-500">
+                      {activeGroup?.description ?? "Create or join a group."}
+                    </p>
+                  </div>
+                  {activeGroup ? (
+                    <div className="flex flex-wrap items-center justify-end gap-3">
+                      <div className="invite-pill">Invite: {activeGroup.inviteCode}</div>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handleExitGroupInit(activeGroup.id);
+                        }}
+                        className="px-3 py-2 text-xs font-bold uppercase tracking-wider text-red-600 bg-white border-2 border-black rounded-full shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:bg-red-50 transition-colors"
+                      >
+                        Exit group
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
-                {activeGroup ? (
-                  <div className="invite-pill">Invite: {activeGroup.inviteCode}</div>
-                ) : null}
-              </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4" style={{ maxHeight: "400px", overflowY: "auto", padding: "4px" }}>
-                {members.map((member) => (
-                  <div className="flex items-center gap-4 p-4 bg-white border-2 border-black rounded-xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:bg-[#fdfdf9] transition-colors" key={member.id}>
-                    <div className="flex-shrink-0 w-12 h-12 rounded-full bg-[#D4F670] border-2 border-black flex items-center justify-center font-bold shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
-                      {groupInitials(member.name)}
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                  {members.map((member) => (
+                    <div className="flex items-center gap-4 p-4 bg-white border-2 border-black rounded-xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:bg-[#fdfdf9] transition-colors" key={member.id}>
+                      <div className="flex-shrink-0 w-12 h-12 rounded-full bg-[#D4F670] border-2 border-black flex items-center justify-center font-bold shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
+                        {groupInitials(member.name)}
+                      </div>
+
+                      <div className="flex-1 min-w-0">
+                        <strong className="text-black block truncate">{member.name}</strong>
+                        <p className="text-xs text-gray-500 truncate">{member.email}</p>
+                      </div>
+
+                      <div className="flex flex-col items-end gap-1 text-sm font-medium flex-shrink-0">
+                        <span className="text-xs uppercase tracking-widest text-[#93c713]">Net</span>
+                        <strong className={member.netBalance >= 0 ? "text-green-600" : "text-red-600"}>
+                          {member.netBalance >= 0 ? "+" : ""}
+                          {displayCurrency(member.netBalance)}
+                        </strong>
+                      </div>
                     </div>
-                    
-                    <div className="flex-1 min-w-0">
-                      <strong className="text-black block truncate">{member.name}</strong>
-                      <p className="text-xs text-gray-500 truncate">{member.email}</p>
+                  ))}
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <div className="rounded-xl border-2 border-black bg-white p-4 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
+                    <p className="text-xs font-bold uppercase tracking-widest text-[#93c713]">Members</p>
+                    <strong className="mt-2 block text-2xl text-black">{members.length}</strong>
+                  </div>
+                  <div className="rounded-xl border-2 border-black bg-white p-4 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
+                    <p className="text-xs font-bold uppercase tracking-widest text-[#93c713]">Total spend</p>
+                    <strong className="mt-2 block text-2xl text-black">{displayCurrency(activeGroup?.totalExpenseAmount ?? 0)}</strong>
+                  </div>
+                  <div className="rounded-xl border-2 border-black bg-white p-4 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
+                    <p className="text-xs font-bold uppercase tracking-widest text-[#93c713]">Pending</p>
+                    <strong className="mt-2 block text-2xl text-black">{activeGroup?.suggestions.length ?? 0}</strong>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border-2 border-black bg-white p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] space-y-5">
+                  <div>
+                    <h3 className="text-lg font-bold tracking-tight flex items-center gap-2">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-[#65a30d]"><path d="M20 12V8H6a2 2 0 0 1-2-2c0-1.1.9-2 2-2h12v4"></path><path d="M4 6v12c0 1.1.9 2 2 2h14v-4"></path><path d="M18 12a2 2 0 0 0-2 2c0 1.1.9 2 2 2h4v-4h-4z"></path></svg>
+                      Wallet tools
+                    </h3>
+                    <p className="mt-1 text-sm text-gray-500">Top up or send wallet funds to your bank through Stripe.</p>
+                  </div>
+
+                  <div className="grid gap-4">
+                    <div className="rounded-xl border-2 border-black bg-[#fdfdf9] p-4 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] space-y-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-xs font-bold uppercase tracking-widest text-[#93c713]">Top up</p>
+                          <p className="text-sm text-gray-500">Add funds with Stripe checkout.</p>
+                        </div>
+                        <strong className="text-sm text-black">{displayCurrency(data.walletBalance)}</strong>
+                      </div>
+                      <div className="field">
+                        <label htmlFor="topup">Amount (₹)</label>
+                        <input
+                          id="topup"
+                          inputMode="decimal"
+                          min="1"
+                          step="1"
+                          placeholder="500"
+                          value={topUpAmount}
+                          onChange={(event) => setTopUpAmount(event.target.value)}
+                        />
+                      </div>
+                      <button
+                        className="flex bg-black text-white font-bold rounded-lg border-2 border-black hover:bg-[#D4F670] hover:text-black transition-colors shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] items-center gap-2 px-5 py-3 w-full justify-center"
+                        disabled={pending}
+                        onClick={handleTopUp}
+                        type="button"
+                      >
+                        {pending ? <><span className="spinner" /> Processing…</> : "Top up via Stripe"}
+                      </button>
                     </div>
 
-                    <div className="flex flex-col items-end gap-1 text-sm font-medium flex-shrink-0">
-                      <span className="text-xs uppercase tracking-widest text-[#93c713]">Net</span>
-                      <strong className={member.netBalance >= 0 ? "text-green-600" : "text-red-600"}>
-                        {member.netBalance >= 0 ? "+" : ""}
-                        {displayCurrency(member.netBalance)}
-                      </strong>
+                    <div className="rounded-xl border-2 border-black bg-[#fdfdf9] p-4 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] space-y-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-xs font-bold uppercase tracking-widest text-[#93c713]">Withdraw</p>
+                          <p className="text-sm text-gray-500">Send wallet funds to your bank with Stripe.</p>
+                        </div>
+                        <strong className="text-sm text-black">Available: {displayCurrency(data.walletBalance)}</strong>
+                      </div>
+                      {!data.stripeAccountSetupComplete ? (
+                        <div className="space-y-3">
+                          <p className="text-sm text-gray-500">Connect your bank account once to enable Stripe payouts.</p>
+                          <button
+                            className="flex bg-white text-black font-bold rounded-lg border-2 border-black hover:bg-[#D4F670] transition-colors shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] items-center gap-2 px-4 py-3 w-full justify-center"
+                            onClick={handleStripeConnect}
+                            disabled={pending}
+                            type="button"
+                          >
+                            {pending ? <><span className="spinner" /> Loading…</> : "Set up bank with Stripe"}
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="field">
+                            <label htmlFor="withdraw">Amount (₹)</label>
+                            <input
+                              id="withdraw"
+                              inputMode="decimal"
+                              min="1"
+                              step="1"
+                              max={data.walletBalance}
+                              value={withdrawAmount}
+                              onChange={(event) => setWithdrawAmount(event.target.value)}
+                              placeholder="500"
+                            />
+                          </div>
+                          <button
+                            className="flex bg-white text-black font-bold rounded-lg border-2 border-black hover:bg-[#D4F670] transition-colors shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] items-center gap-2 px-4 py-3 w-full justify-center"
+                            onClick={handleWithdraw}
+                            disabled={pending || data.walletBalance <= 0}
+                            type="button"
+                          >
+                            {pending ? <><span className="spinner" /> Processing…</> : "Withdraw to bank via Stripe"}
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
-                ))}
-              </div>
+                </div>
               </SlideUp>
 
               <StaggerContainer staggerChildren={0.1} delayChildren={0.1} className="space-y-6">
-                <SlideUp className="bg-white border-2 border-black rounded-xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] p-6">
-                <div className="mb-5 border-b border-black pb-3">
-                  <h2 className="text-lg font-bold tracking-tight flex items-center gap-2">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-[#65a30d]"><path d="M20 12V8H6a2 2 0 0 1-2-2c0-1.1.9-2 2-2h12v4"></path><path d="M4 6v12c0 1.1.9 2 2 2h14v-4"></path><path d="M18 12a2 2 0 0 0-2 2c0 1.1.9 2 2 2h4v-4h-4z"></path></svg>
-                    Top Up
-                  </h2>
-                </div>
-                <div className="space-y-4">
-                  <div className="field">
-                    <label htmlFor="topup">Amount (₹)</label>
-                    <input
-                      id="topup"
-                      inputMode="decimal"
-                      min="1"
-                      step="1"
-                      placeholder="500"
-                      value={topUpAmount}
-                      onChange={(event) => setTopUpAmount(event.target.value)}
-                    />
-                  </div>
-                  <button
-                    className="flex bg-black text-white font-bold rounded-lg border-2 border-black hover:bg-[#D4F670] hover:text-black transition-colors shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] items-center gap-2 px-4 py-2 w-full justify-center"
-                    disabled={pending}
-                    onClick={handleTopUp}
-                    type="button"
-                  >
-                    {pending ? <><span className="spinner" /> Processing…</> : "Top up via Stripe"}
-                  </button>
-                </div>
-              </SlideUp>
-
-              <SlideUp className="bg-[#fdfdf9] border-2 border-black rounded-xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] p-6">
-                <div className="mb-5 border-b border-black pb-3">
-                  <h2 className="text-lg font-bold tracking-tight text-black flex items-center gap-2">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-[#65a30d]"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                    New Expense
-                  </h2>
-                </div>
-
-                {/* ── Quick Templates ── */}
-                <div className="mb-4 flex flex-wrap gap-3">
-                  <button type="button" onClick={() => setExpenseState(s => ({ ...s, description: "Monthly Rent", category: ExpenseCategory.STAY }))} className="pl-3 pr-5 py-1.5 text-xs font-semibold rounded-full bg-[#f6f6f6] border border-black text-[#65a30d] hover:bg-[#D4F670] hover:text-black transition-all hover:-translate-y-0.5 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
-                    🏠 Rent
-                  </button>
-                  <button type="button" onClick={() => setExpenseState(s => ({ ...s, description: "Netflix", category: ExpenseCategory.ENTERTAINMENT }))} className="pl-3 pr-5 py-1.5 text-xs font-semibold rounded-full bg-[#f6f6f6] border border-black text-[#e50914] hover:bg-[#e50914] hover:text-white transition-all hover:-translate-y-0.5 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
-                    🍿 Netflix
-                  </button>
-                  <button type="button" onClick={() => setExpenseState(s => ({ ...s, description: "Office Lunch", category: ExpenseCategory.FOOD }))} className="pl-3 pr-5 py-1.5 text-xs font-semibold rounded-full bg-[#f6f6f6] border border-black text-[#f5a623] hover:bg-[#f5a623] hover:text-black transition-all hover:-translate-y-0.5 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
-                    🍜 Lunch
-                  </button>
-                </div>
-
-                {/* Scan + Voice input */}
-                <div className="mb-4 grid grid-cols-[1fr_auto] gap-3">
-                  <div
-                    className="rounded-[12px] border-2 border-dashed border-black p-3 text-center transition-colors hover:border-[#D4F670] cursor-pointer"
-                    onClick={() => fileInputRef.current?.click()}
-                    onDragOver={(e) => { e.preventDefault(); e.currentTarget.style.borderColor = '#D4F670'; }}
-                    onDragLeave={(e) => { e.currentTarget.style.borderColor = ''; }}
-                    onDrop={(e) => {
-                      e.preventDefault();
-                      e.currentTarget.style.borderColor = '';
-                      const file = e.dataTransfer.files[0];
-                      if (file && file.type.startsWith('image/')) {
-                        processReceiptFile(file);
-                      }
-                    }}
-                  >
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept="image/*"
-                      className="hidden"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) processReceiptFile(file);
-                        e.target.value = '';
-                      }}
-                    />
-                    {scanning ? (
-                      <div className="flex items-center justify-center gap-2 py-1">
-                        <span className="spinner" />
-                        <span className="text-xs text-[#65a30d] font-semibold">Reading receipt…</span>
+                <SlideUp className="bg-[#fdfdf9] border-2 border-black rounded-xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] p-6">
+                  <div ref={expenseComposerRef} className="mb-4 border-b border-black pb-3 scroll-mt-28">
+                    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                      <div>
+                        <h2 className="text-lg font-bold tracking-tight text-black flex items-center gap-2">
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-[#65a30d]"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                          New Expense
+                        </h2>
+                        <p className="mt-1 text-sm text-gray-500">This stays front and center so adding a shared cost takes one quick step.</p>
                       </div>
-                    ) : (
-                      <>
-                        <svg className="mx-auto mb-1" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                          <rect x="3" y="3" width="18" height="18" rx="2" />
-                          <line x1="3" y1="9" x2="21" y2="9" />
-                          <line x1="9" y1="3" x2="9" y2="21" />
-                        </svg>
-                        <p className="text-xs font-semibold text-black">Scan receipt</p>
-                      </>
-                    )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setExpenseState({
+                            description: "",
+                            amount: "",
+                            payerId: data.userId,
+                            category: ExpenseCategory.OTHER,
+                          });
+                          setSplitMethod("EQUAL");
+                          setSplitValues({});
+                          setEditingExpenseId(null);
+                          setSelectedMembers(new Set(members.map((member) => member.id)));
+                          scrollToExpenseComposer();
+                        }}
+                        className="px-4 py-2 bg-white text-black font-bold rounded-xl border-2 border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:bg-[#D4F670] transition-colors"
+                      >
+                        Fresh form
+                      </button>
+                    </div>
                   </div>
 
-                  {/* Voice input button */}
-                  <button
-                    type="button"
-                    className={`flex flex-col items-center justify-center rounded-[12px] border-2 px-4 transition-all cursor-pointer ${
-                      recording
+                  <div className="mb-4 flex flex-wrap gap-3">
+                    <button type="button" onClick={() => setExpenseState(s => ({ ...s, description: "Monthly Rent", category: ExpenseCategory.STAY }))} className="pl-3 pr-5 py-1.5 text-xs font-semibold rounded-full bg-[#f6f6f6] border border-black text-[#65a30d] hover:bg-[#D4F670] hover:text-black transition-all hover:-translate-y-0.5 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
+                      🏠 Rent
+                    </button>
+                    <button type="button" onClick={() => setExpenseState(s => ({ ...s, description: "Netflix", category: ExpenseCategory.ENTERTAINMENT }))} className="pl-3 pr-5 py-1.5 text-xs font-semibold rounded-full bg-[#f6f6f6] border border-black text-[#e50914] hover:bg-[#e50914] hover:text-white transition-all hover:-translate-y-0.5 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
+                      🍿 Netflix
+                    </button>
+                    <button type="button" onClick={() => setExpenseState(s => ({ ...s, description: "Office Lunch", category: ExpenseCategory.FOOD }))} className="pl-3 pr-5 py-1.5 text-xs font-semibold rounded-full bg-[#f6f6f6] border border-black text-[#f5a623] hover:bg-[#f5a623] hover:text-black transition-all hover:-translate-y-0.5 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
+                      🍜 Lunch
+                    </button>
+                  </div>
+
+                  {/* Scan + Voice input */}
+                  <div className="mb-4 grid grid-cols-[1fr_auto] gap-3">
+                    <div
+                      className="rounded-[12px] border-2 border-dashed border-black p-3 text-center transition-colors hover:border-[#D4F670] cursor-pointer"
+                      onClick={() => fileInputRef.current?.click()}
+                      onDragOver={(e) => { e.preventDefault(); e.currentTarget.style.borderColor = '#D4F670'; }}
+                      onDragLeave={(e) => { e.currentTarget.style.borderColor = ''; }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        e.currentTarget.style.borderColor = '';
+                        const file = e.dataTransfer.files[0];
+                        if (file && file.type.startsWith('image/')) {
+                          processReceiptFile(file);
+                        }
+                      }}
+                    >
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) processReceiptFile(file);
+                          e.target.value = '';
+                        }}
+                      />
+                      {scanning ? (
+                        <div className="flex items-center justify-center gap-2 py-1">
+                          <span className="spinner" />
+                          <span className="text-xs text-[#65a30d] font-semibold">Reading receipt…</span>
+                        </div>
+                      ) : (
+                        <>
+                          <svg className="mx-auto mb-1" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                            <rect x="3" y="3" width="18" height="18" rx="2" />
+                            <line x1="3" y1="9" x2="21" y2="9" />
+                            <line x1="9" y1="3" x2="9" y2="21" />
+                          </svg>
+                          <p className="text-xs font-semibold text-black">Scan receipt</p>
+                        </>
+                      )}
+                    </div>
+
+                    {/* Voice input button */}
+                    <button
+                      type="button"
+                      className={`flex flex-col items-center justify-center rounded-[12px] border-2 px-4 transition-all cursor-pointer ${recording
                         ? 'border-red-500 bg-red-500/10 animate-pulse'
                         : 'border-dashed border-black hover:border-[#D4F670]'
-                    }`}
-                    onClick={startVoiceRecording}
-                    disabled={recording}
-                  >
-                    {recording ? (
-                      <>
-                        <div className="w-5 h-5 rounded-full bg-red-500 animate-pulse" />
-                        <p className="text-xs font-semibold text-red-400 mt-1">Listening…</p>
-                      </>
-                    ) : (
-                      <>
-                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-                          <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                          <line x1="12" y1="19" x2="12" y2="23" />
-                          <line x1="8" y1="23" x2="16" y2="23" />
-                        </svg>
-                        <p className="text-xs font-semibold text-black mt-1">Voice</p>
-                      </>
-                    )}
-                  </button>
-                </div>
+                        }`}
+                      onClick={startVoiceRecording}
+                    >
+                      {recording ? (
+                        <>
+                          <div className="w-5 h-5 rounded-full bg-red-500 animate-pulse" />
+                          <p className="text-xs font-semibold text-red-500 mt-1">Listening…</p>
+                        </>
+                      ) : (
+                        <>
+                          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                            <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                            <line x1="12" y1="19" x2="12" y2="23" />
+                            <line x1="8" y1="23" x2="16" y2="23" />
+                          </svg>
+                          <p className="text-xs font-semibold text-black mt-1">Voice</p>
+                        </>
+                      )}
+                    </button>
+                  </div>
 
-                {/* Voice transcript preview */}
-                {voiceTranscript && (
-                  <div className="mb-3 rounded-[8px] bg-white border border-black px-3 py-2">
-                    <p className="text-xs text-gray-500 mb-1">Heard:</p>
-                    <p className="text-sm text-black italic">“{voiceTranscript}”</p>
-                  </div>
-                )}
-                <div className="space-y-4">
-                  <div className="field">
-                    <label htmlFor="description">What was it for?</label>
-                    <input
-                      id="description"
-                      value={expenseState.description}
-                      onChange={(event) =>
-                        setExpenseState((current) => ({
-                          ...current,
-                          description: event.target.value,
-                        }))
-                      }
-                      placeholder="Uber to airport"
-                    />
-                  </div>
-                  <div className="grid gap-4 sm:grid-cols-2">
+                  {/* Voice transcript preview */}
+                  {voiceTranscript && (
+                    <div className="mb-3 rounded-[8px] bg-white border border-black px-3 py-2">
+                      <p className="text-xs text-gray-500 mb-1">Heard:</p>
+                      <p className="text-sm text-black italic">“{voiceTranscript}”</p>
+                    </div>
+                  )}
+                  <div className="space-y-4">
                     <div className="field">
-                      <label htmlFor="amount">How much? (₹)</label>
+                      <label htmlFor="description">What was it for?</label>
                       <input
-                        id="amount"
-                        inputMode="decimal"
-                        value={expenseState.amount}
+                        id="description"
+                        value={expenseState.description}
                         onChange={(event) =>
                           setExpenseState((current) => ({
                             ...current,
-                            amount: event.target.value,
+                            description: event.target.value,
                           }))
                         }
-                        placeholder="4800"
+                        placeholder="Uber to airport"
                       />
                     </div>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div className="field">
+                        <label htmlFor="amount">How much? (₹)</label>
+                        <input
+                          id="amount"
+                          inputMode="decimal"
+                          value={expenseState.amount}
+                          onChange={(event) =>
+                            setExpenseState((current) => ({
+                              ...current,
+                              amount: event.target.value,
+                            }))
+                          }
+                          placeholder="4800"
+                        />
+                      </div>
+                      <div className="field">
+                        <label htmlFor="category">Category</label>
+                        <select
+                          id="category"
+                          value={expenseState.category}
+                          onChange={(event) =>
+                            setExpenseState((current) => ({
+                              ...current,
+                              category: event.target.value as ExpenseCategory,
+                            }))
+                          }
+                        >
+                          {categoryOptions.map((category) => (
+                            <option key={category} value={category}>
+                              {category.replaceAll("_", " ")}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
                     <div className="field">
-                      <label htmlFor="category">Category</label>
+                      <label htmlFor="payer">Who paid?</label>
                       <select
-                        id="category"
-                        value={expenseState.category}
+                        id="payer"
+                        value={expenseState.payerId}
                         onChange={(event) =>
                           setExpenseState((current) => ({
                             ...current,
-                            category: event.target.value as ExpenseCategory,
+                            payerId: event.target.value,
                           }))
                         }
                       >
-                        {categoryOptions.map((category) => (
-                          <option key={category} value={category}>
-                            {category.replaceAll("_", " ")}
+                        {members.map((member) => (
+                          <option key={member.id} value={member.id}>
+                            {member.name}
                           </option>
                         ))}
                       </select>
                     </div>
-                  </div>
-                  <div className="field">
-                    <label htmlFor="payer">Who paid?</label>
-                    <select
-                      id="payer"
-                      value={expenseState.payerId}
-                      onChange={(event) =>
-                        setExpenseState((current) => ({
-                          ...current,
-                          payerId: event.target.value,
-                        }))
-                      }
-                    >
-                      {members.map((member) => (
-                        <option key={member.id} value={member.id}>
-                          {member.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
 
-                  {/* Member selection toggle */}
-                  <div className="field">
-                    <label>Who is involved?</label>
-                    <div className="flex flex-wrap gap-2">
-                      {members.map((member) => (
-                        <button
-                          key={member.id}
-                          type="button"
-                          onClick={() => toggleMember(member.id)}
-                          className={`rounded-full px-3 py-1 text-xs font-medium transition-colors border ${
-                            selectedMembers.has(member.id)
-                              ? "bg-[#D4F670]/10 border-[#D4F670] text-[#65a30d]"
-                              : "bg-white border-black text-gray-500 hover:border-[var(--text)] hover:text-black"
-                          }`}
-                        >
-                          {member.name}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Split method toggle */}
-                  <div className="field">
-                    <label>Split method</label>
-                    <div className="flex gap-1 rounded-[12px] border border-black p-1">
-                      {splitMethodOptions.map((opt) => (
-                        <button
-                          key={opt.key}
-                          type="button"
-                          className={`flex-1 rounded-[8px] px-3 py-1.5 text-xs font-semibold transition-all ${
-                            splitMethod === opt.key
+                    {/* Member selection toggle */}
+                    <div className="field">
+                      <label>Who is involved?</label>
+                      <div className="flex flex-wrap gap-2">
+                        {members.map((member) => (
+                          <button
+                            key={member.id}
+                            type="button"
+                            onClick={() => toggleMember(member.id)}
+                            className={`rounded-lg px-4 py-2 text-xs font-bold transition-all border-2 border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:-translate-y-0.5 ${selectedMembers.has(member.id)
                               ? "bg-[#D4F670] text-black"
-                              : "text-gray-500 hover:text-black"
-                          }`}
-                          onClick={() => {
-                            setSplitMethod(opt.key);
-                            if (opt.key === "EQUAL") setSplitValues({});
-                          }}
-                        >
-                          {opt.label}
-                        </button>
-                      ))}
+                              : "bg-white text-gray-500 hover:text-black hover:bg-gray-50"
+                              }`}
+                          >
+                            {member.name}
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                  </div>
 
-                  {/* Per-member split inputs */}
-                  {splitMethod !== "EQUAL" && selectedMembers.size > 0 ? (
-                    <div className="space-y-2">
-                      <label className="text-xs font-semibold uppercase tracking-wider text-gray-500">
-                        {splitMethod === "PERCENT" ? "% per person" : "₹ per person"}
-                      </label>
-                      {members.filter(m => selectedMembers.has(m.id)).map((member) => (
-                        <div key={member.id} className="flex items-center gap-3">
-                          <span className="min-w-[100px] text-sm text-black">{member.name}</span>
-                          <input
-                            className="flex-1"
-                            inputMode="decimal"
-                            placeholder={splitMethod === "PERCENT" ? `${Math.round(100 / selectedMembers.size)}` : "0"}
-                            value={splitValues[member.id] ?? ""}
-                            onChange={(e) =>
-                              setSplitValues((curr) => ({ ...curr, [member.id]: e.target.value }))
-                            }
-                          />
-                          <span className="text-xs text-gray-500">
-                            {splitMethod === "PERCENT" ? "%" : "₹"}
-                          </span>
+                    {/* Split method toggle */}
+                    <div className="field">
+                      <label>Split method</label>
+                      <div className="flex gap-1 rounded-[12px] border border-black p-1">
+                        {splitMethodOptions.map((opt) => (
+                          <button
+                            key={opt.key}
+                            type="button"
+                            className={`flex-1 rounded-[8px] px-3 py-1.5 text-xs font-semibold transition-all ${splitMethod === opt.key
+                                ? "bg-[#D4F670] text-black"
+                                : "text-gray-500 hover:text-black"
+                              }`}
+                            onClick={() => {
+                              setSplitMethod(opt.key);
+                              if (opt.key === "EQUAL") setSplitValues({});
+                            }}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* AI Itemized Split UI */}
+                    {scannedItems.length > 0 && splitMethod === "CUSTOM" && (
+                      <div className="bg-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] rounded-xl p-5 space-y-4 mb-4">
+                        <div className="flex justify-between items-center border-b-2 border-black pb-3">
+                           <span className="font-black tracking-tight text-lg uppercase">Receipt Items</span>
+                           <span className="bg-[#D4F670] border-2 border-black px-2 py-1 text-xs font-bold rounded shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] uppercase">AI Extracted</span>
                         </div>
-                      ))}
-                      <p className="text-xs text-gray-500">
-                        {splitMethod === "PERCENT"
-                          ? `Total: ${members.filter(m => selectedMembers.has(m.id)).reduce((s, m) => s + (Number(splitValues[m.id]) || 0), 0)}% of 100%`
-                          : `Total: ₹${members.filter(m => selectedMembers.has(m.id)).reduce((s, m) => s + (Number(splitValues[m.id]) || 0), 0).toFixed(2)} of ₹${expenseState.amount || "0"}`}
-                      </p>
-                    </div>
-                  ) : null}
-
-                  <button
-                    className="flex bg-white text-black font-bold rounded-lg border-2 border-black hover:bg-[#D4F670] transition-colors shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] items-center gap-2 px-4 py-2 w-full justify-center relative overflow-hidden group"
-                    disabled={pending || !activeGroup || selectedMembers.size === 0}
-                    onClick={submitExpense}
-                    type="button"
-                  >
-                    {pending ? (
-                      <>
-                        <span className="spinner" />
-                        Processing…
-                      </>
-                    ) : (
-                      editingExpenseId ? "Update Expense" : (splitMethod === "EQUAL" ? "Split equally" : splitMethod === "PERCENT" ? "Split by percentage" : "Split by exact amounts")
+                        <div className="flex flex-col gap-3">
+                          {scannedItems.map((item) => (
+                            <div key={item.id} className="flex flex-col sm:flex-row justify-between sm:items-center gap-3 bg-[#fdfdf9] border-2 border-black p-3 rounded-lg hover:bg-[#f6f6f6] transition-colors">
+                              <div className="flex justify-between sm:justify-start w-full sm:w-1/2 gap-4 items-center">
+                                <span className="font-bold text-sm truncate uppercase" title={item.name}>{item.name}</span>
+                                <span className="font-black text-lg whitespace-nowrap">₹{item.amount.toFixed(2)}</span>
+                              </div>
+                              <select
+                                className="w-full sm:w-1/2 appearance-none bg-white border-2 border-black rounded-lg px-3 py-2 text-sm font-bold shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] focus:outline-none focus:ring-2 focus:ring-[#D4F670] cursor-pointer"
+                                value={item.assignedToUserId || ""}
+                                onChange={(e) => {
+                                  const userId = e.target.value;
+                                  setScannedItems(items => items.map(i => i.id === item.id ? { ...i, assignedToUserId: userId } : i));
+                                }}
+                              >
+                                <option value="" disabled>Assign to...</option>
+                                <option value="SHARED">Everyone (Shared)</option>
+                                {members.filter(m => selectedMembers.has(m.id)).map(m => (
+                                  <option key={m.id} value={m.id}>{m.name}</option>
+                                ))}
+                              </select>
+                            </div>
+                          ))}
+                        </div>
+                        <p className="text-xs font-bold text-gray-500 mt-2">
+                          Items assigned above will automatically tally in the Custom Split panel below. "Everyone" divides equally.
+                        </p>
+                      </div>
                     )}
-                  </button>
-                  {editingExpenseId && (
-                    <button 
-                      className="mt-3 text-xs font-bold uppercase tracking-wider text-gray-500 hover:text-red-500 text-center w-full block outline-none transition-colors" 
-                      onClick={() => {
-                        setEditingExpenseId(null);
-                        setExpenseState({ description: "", amount: "", payerId: data.userId, category: ExpenseCategory.OTHER });
-                        setSplitMethod("EQUAL");
-                        setSplitValues({});
-                        setSelectedMembers(new Set(members.map(m => m.id)));
-                      }}
+
+                    {/* Per-member split inputs */}
+                    {splitMethod !== "EQUAL" && selectedMembers.size > 0 ? (
+                      <div className="space-y-2">
+                        <label className="text-xs font-semibold uppercase tracking-wider text-gray-500">
+                          {splitMethod === "PERCENT" ? "% per person" : "₹ per person"}
+                        </label>
+                        {members.filter(m => selectedMembers.has(m.id)).map((member) => (
+                          <div key={member.id} className="flex items-center gap-3">
+                            <span className="min-w-[100px] text-sm text-black">{member.name}</span>
+                            <input
+                              className="flex-1"
+                              inputMode="decimal"
+                              placeholder={splitMethod === "PERCENT" ? `${Math.round(100 / selectedMembers.size)}` : "0"}
+                              value={splitValues[member.id] ?? ""}
+                              onChange={(e) =>
+                                setSplitValues((curr) => ({ ...curr, [member.id]: e.target.value }))
+                              }
+                            />
+                            <span className="text-xs text-gray-500">
+                              {splitMethod === "PERCENT" ? "%" : "₹"}
+                            </span>
+                          </div>
+                        ))}
+                        <p className="text-xs text-gray-500">
+                          {splitMethod === "PERCENT"
+                            ? `Total: ${members.filter(m => selectedMembers.has(m.id)).reduce((s, m) => s + (Number(splitValues[m.id]) || 0), 0)}% of 100%`
+                            : `Total: ₹${members.filter(m => selectedMembers.has(m.id)).reduce((s, m) => s + (Number(splitValues[m.id]) || 0), 0).toFixed(2)} of ₹${expenseState.amount || "0"}`}
+                        </p>
+                      </div>
+                    ) : null}
+
+                    <button
+                      className="flex bg-white text-black font-bold rounded-lg border-2 border-black hover:bg-[#D4F670] transition-colors shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] items-center gap-2 px-4 py-2 w-full justify-center relative overflow-hidden group"
+                      disabled={pending || !activeGroup || selectedMembers.size === 0}
+                      onClick={submitExpense}
+                      type="button"
                     >
-                       Cancel Edit
+                      {pending ? (
+                        <>
+                          <span className="spinner" />
+                          Processing…
+                        </>
+                      ) : (
+                        editingExpenseId ? "Update Expense" : (splitMethod === "EQUAL" ? "Split equally" : splitMethod === "PERCENT" ? "Split by percentage" : "Split by exact amounts")
+                      )}
                     </button>
-                  )}
-                </div>
+                    {editingExpenseId && (
+                      <button
+                        className="mt-3 text-xs font-bold uppercase tracking-wider text-gray-500 hover:text-red-500 text-center w-full block outline-none transition-colors"
+                        onClick={() => {
+                          setEditingExpenseId(null);
+                          setExpenseState({ description: "", amount: "", payerId: data.userId, category: ExpenseCategory.OTHER });
+                          setSplitMethod("EQUAL");
+                          setSplitValues({});
+                          setSelectedMembers(new Set(members.map(m => m.id)));
+                        }}
+                      >
+                        Cancel Edit
+                      </button>
+                    )}
+                  </div>
                 </SlideUp>
               </StaggerContainer>
             </StaggerContainer>
@@ -1815,134 +2174,134 @@ export function DashboardClient({ data }: { data: DashboardData }) {
           {data.groups.length > 0 && section === "groups" ? (
             <StaggerContainer key="groups" className="grid gap-6 xl:grid-cols-[1fr_1fr] w-full">
               <SlideUp className="bg-[#fdfdf9] border-2 border-black rounded-xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] p-6 space-y-5">
-              <div>
-                <p className="text-xs font-bold uppercase tracking-widest text-[#93c713] mb-3 relative inline-block">Spin up a group</p>
-                <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-black">
-                  Start a fresh ledger
-                </h2>
-              </div>
-              <div className="field">
-                <label htmlFor="group-name">Group name</label>
-                <input
-                  id="group-name"
-                  value={groupState.name}
-                  onChange={(event) =>
-                    setGroupState((current) => ({
-                      ...current,
-                      name: event.target.value,
-                    }))
-                  }
-                  placeholder="Bangalore flat"
-                />
-              </div>
-              <div className="field">
-                <label htmlFor="group-description">Description</label>
-                <input
-                  id="group-description"
-                  value={groupState.description}
-                  onChange={(event) =>
-                    setGroupState((current) => ({
-                      ...current,
-                      description: event.target.value,
-                    }))
-                  }
-                  placeholder="Rent, groceries, utilities"
-                />
-              </div>
-              <button className="flex bg-black text-white font-bold rounded-lg border-2 border-black hover:bg-[#D4F670] hover:text-black transition-colors shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] items-center gap-2 px-4 py-2" onClick={createNewGroup} type="button">
-                {pending ? (
-                  <>
-                    <span className="spinner" />
-                    Creating…
-                  </>
-                ) : (
-                  "Create group"
-                )}
-              </button>
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-widest text-[#93c713] mb-3 relative inline-block">Spin up a group</p>
+                  <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-black">
+                    Start a fresh ledger
+                  </h2>
+                </div>
+                <div className="field">
+                  <label htmlFor="group-name">Group name</label>
+                  <input
+                    id="group-name"
+                    value={groupState.name}
+                    onChange={(event) =>
+                      setGroupState((current) => ({
+                        ...current,
+                        name: event.target.value,
+                      }))
+                    }
+                    placeholder="Bangalore flat"
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor="group-description">Description</label>
+                  <input
+                    id="group-description"
+                    value={groupState.description}
+                    onChange={(event) =>
+                      setGroupState((current) => ({
+                        ...current,
+                        description: event.target.value,
+                      }))
+                    }
+                    placeholder="Rent, groceries, utilities"
+                  />
+                </div>
+                <button className="flex bg-black text-white font-bold rounded-lg border-2 border-black hover:bg-[#D4F670] hover:text-black transition-colors shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] items-center gap-2 px-4 py-2" onClick={createNewGroup} type="button">
+                  {pending ? (
+                    <>
+                      <span className="spinner" />
+                      Creating…
+                    </>
+                  ) : (
+                    "Create group"
+                  )}
+                </button>
               </SlideUp>
 
               <SlideUp className="bg-[#fdfdf9] border-2 border-black rounded-xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] p-6 space-y-5">
-              <div>
-                <p className="text-xs font-bold uppercase tracking-widest text-[#93c713] mb-3 relative inline-block">Got an invite?</p>
-                <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-black">
-                  Jump in with a code
-                </h2>
-              </div>
-              <div className="field">
-                <label htmlFor="invite-code">Invite code</label>
-                <input
-                  id="invite-code"
-                  value={groupState.inviteCode}
-                  onChange={(event) =>
-                    setGroupState((current) => ({
-                      ...current,
-                      inviteCode: event.target.value,
-                    }))
-                  }
-                  placeholder="AB12CD34"
-                />
-              </div>
-              <button className="flex bg-white text-black font-bold rounded-lg border-2 border-black hover:bg-[#D4F670] transition-colors shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] items-center gap-2 px-4 py-2" onClick={joinExistingGroup} type="button">
-                {pending ? (
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-widest text-[#93c713] mb-3 relative inline-block">Got an invite?</p>
+                  <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-black">
+                    Jump in with a code
+                  </h2>
+                </div>
+                <div className="field">
+                  <label htmlFor="invite-code">Invite code</label>
+                  <input
+                    id="invite-code"
+                    value={groupState.inviteCode}
+                    onChange={(event) =>
+                      setGroupState((current) => ({
+                        ...current,
+                        inviteCode: event.target.value,
+                      }))
+                    }
+                    placeholder="AB12CD34"
+                  />
+                </div>
+                <button className="flex bg-white text-black font-bold rounded-lg border-2 border-black hover:bg-[#D4F670] transition-colors shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] items-center gap-2 px-4 py-2" onClick={joinExistingGroup} type="button">
+                  {pending ? (
+                    <>
+                      <span className="spinner" />
+                      Joining…
+                    </>
+                  ) : (
+                    "Join group"
+                  )}
+                </button>
+                {activeGroup ? (
                   <>
-                    <span className="spinner" />
-                    Joining…
-                  </>
-                ) : (
-                  "Join group"
-                )}
-              </button>
-              {activeGroup ? (
-                <>
-                  <div className="divider" />
-                  <div>
-                    <p className="text-xs font-bold uppercase tracking-widest text-[#93c713] mb-3 relative inline-block">Add member to {activeGroup.name}</p>
-                    <div className="field mt-3">
-                      <label htmlFor="member-email">Member email</label>
-                      <input
-                        id="member-email"
-                        type="email"
-                        value={memberEmail}
-                        onChange={(event) => setMemberEmail(event.target.value)}
-                        placeholder="friend@example.com"
-                      />
+                    <div className="divider" />
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-widest text-[#93c713] mb-3 relative inline-block">Add member to {activeGroup.name}</p>
+                      <div className="field mt-3">
+                        <label htmlFor="member-email">Member email</label>
+                        <input
+                          id="member-email"
+                          type="email"
+                          value={memberEmail}
+                          onChange={(event) => setMemberEmail(event.target.value)}
+                          placeholder="friend@example.com"
+                        />
+                      </div>
+                      <button className="flex bg-white text-black font-bold rounded-lg border-2 border-black hover:bg-[#D4F670] transition-colors shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] items-center gap-2 px-4 py-2 mt-4" onClick={addMember} type="button">
+                        {pending ? (
+                          <>
+                            <span className="spinner" />
+                            Adding…
+                          </>
+                        ) : (
+                          "Add member"
+                        )}
+                      </button>
                     </div>
-                    <button className="flex bg-white text-black font-bold rounded-lg border-2 border-black hover:bg-[#D4F670] transition-colors shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] items-center gap-2 px-4 py-2 mt-4" onClick={addMember} type="button">
-                      {pending ? (
-                        <>
-                          <span className="spinner" />
-                          Adding…
-                        </>
-                      ) : (
-                        "Add member"
-                      )}
-                    </button>
-                  </div>
-                </>
-              ) : null}
+                  </>
+                ) : null}
               </SlideUp>
 
               <SlideUp className="bg-[#fdfdf9] border-2 border-black rounded-xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] p-6 xl:col-span-2">
-              <div className="mb-5">
-                <p className="text-xs font-bold uppercase tracking-widest text-[#93c713] mb-3 relative inline-block">Your squads</p>
-                <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-black">
-                  All your groups in one place
-                </h2>
-              </div>
-              <div className="flex flex-col gap-2">
-                {data.groups.map((group) => (
-                  <div className="flex items-center justify-between p-4 bg-white border-2 border-black rounded-xl shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:bg-[#f6f6f6] transition-colors" key={group.id}>
-                    <div>
-                      <strong>{group.name}</strong>
-                      <p>{group.description || "No description"}</p>
+                <div className="mb-5">
+                  <p className="text-xs font-bold uppercase tracking-widest text-[#93c713] mb-3 relative inline-block">Your squads</p>
+                  <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-black">
+                    All your groups in one place
+                  </h2>
+                </div>
+                <div className="flex flex-col gap-2">
+                  {data.groups.map((group) => (
+                    <div className="flex items-center justify-between p-4 bg-white border-2 border-black rounded-xl shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:bg-[#f6f6f6] transition-colors" key={group.id}>
+                      <div>
+                        <strong>{group.name}</strong>
+                        <p>{group.description || "No description"}</p>
+                      </div>
+                      <div className="text-right">
+                        <strong>{group.members.length} members</strong>
+                        <p>Code: {group.inviteCode}</p>
+                      </div>
                     </div>
-                    <div className="text-right">
-                      <strong>{group.members.length} members</strong>
-                      <p>Code: {group.inviteCode}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
               </SlideUp>
             </StaggerContainer>
           ) : null}
@@ -1951,146 +2310,146 @@ export function DashboardClient({ data }: { data: DashboardData }) {
             <StaggerContainer key="settlements" className="grid gap-6 xl:grid-cols-[1fr_0.92fr] w-full">
               <StaggerContainer staggerChildren={0.1} className="space-y-6">
                 <SlideUp className="bg-[#fdfdf9] border-2 border-black rounded-xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] p-6">
-                <div className="mb-5">
-                  <p className="text-xs font-bold uppercase tracking-widest text-[#93c713] mb-3 relative inline-block">Optimized settlements</p>
-                  <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-black">
-                    Who owes who — cut the noise
-                  </h2>
-                </div>
-                <div className="flex flex-col gap-2">
-                  {activeGroup?.suggestions.length ? (
-                    activeGroup.suggestions.map((suggestion, index) => (
-                      <div className="flex items-center justify-between p-4 bg-white border-2 border-black rounded-xl shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:bg-[#f6f6f6] transition-colors" key={`${suggestion.fromUserId}-${suggestion.toUserId}-${index}`}>
-                        <div>
-                          <strong>
-                            {suggestion.fromName} → {suggestion.toName}
-                          </strong>
-                          <p>Minimum-path settlement.</p>
+                  <div className="mb-5">
+                    <p className="text-xs font-bold uppercase tracking-widest text-[#93c713] mb-3 relative inline-block">Optimized settlements</p>
+                    <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-black">
+                      Who owes who — cut the noise
+                    </h2>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    {activeGroup?.suggestions.length ? (
+                      activeGroup.suggestions.map((suggestion, index) => (
+                        <div className="flex items-center justify-between p-4 bg-white border-2 border-black rounded-xl shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:bg-[#f6f6f6] transition-colors" key={`${suggestion.fromUserId}-${suggestion.toUserId}-${index}`}>
+                          <div>
+                            <strong>
+                              {suggestion.fromName} → {suggestion.toName}
+                            </strong>
+                            <p>Minimum-path settlement.</p>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <strong className="text-[#65a30d]">{displayCurrency(suggestion.amount)}</strong>
+                            {suggestion.fromUserId === data.userId ? (
+                              <button
+                                className="flex bg-black text-white font-bold rounded-lg border-2 border-black hover:bg-[#D4F670] hover:text-black transition-colors shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] items-center gap-2 px-4 py-2"
+                                disabled={pending}
+                                onClick={() => settleSuggestion(suggestion)}
+                                type="button"
+                              >
+                                {pending ? (
+                                  <span className="spinner" />
+                                ) : (
+                                  "Pay now"
+                                )}
+                              </button>
+                            ) : null}
+                          </div>
                         </div>
-                        <div className="flex items-center gap-3">
-                          <strong className="text-[#65a30d]">{displayCurrency(suggestion.amount)}</strong>
-                          {suggestion.fromUserId === data.userId ? (
-                            <button
-                              className="flex bg-black text-white font-bold rounded-lg border-2 border-black hover:bg-[#D4F670] hover:text-black transition-colors shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] items-center gap-2 px-4 py-2"
-                              disabled={pending}
-                              onClick={() => settleSuggestion(suggestion)}
-                              type="button"
-                            >
-                              {pending ? (
-                                <span className="spinner" />
-                              ) : (
-                                "Pay now"
-                              )}
-                            </button>
-                          ) : null}
-                        </div>
+                      ))
+                    ) : (
+                      <div className="empty-state">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#D4F670" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ margin: "0 auto 0.5rem" }}>
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                        All square. No debts.
                       </div>
-                    ))
-                  ) : (
-                    <div className="empty-state">
-                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#D4F670" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ margin: "0 auto 0.5rem" }}>
-                        <polyline points="20 6 9 17 4 12" />
-                      </svg>
-                      All square. No debts.
-                    </div>
-                  )}
-                </div>
+                    )}
+                  </div>
                 </SlideUp>
 
                 {/* Pre-settlement card */}
                 <SlideUp className="bg-white border-2 border-black rounded-xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] p-6">
-                <div className="mb-5">
-                  <p className="text-xs font-bold uppercase tracking-widest text-[#93c713] mb-3 relative inline-block">Pre-settle</p>
-                  <h2 className="mt-2 text-xl font-bold tracking-[-0.04em]">
-                    Pay ahead, owe less later
-                  </h2>
-                  <p className="mt-1 text-xs text-gray-500">
-                    Send money now — it gets deducted from future debts.
-                    Wallet: <strong className="text-[#65a30d]">{displayCurrency(data.walletBalance)}</strong>
-                  </p>
-                </div>
-                <div className="space-y-4">
-                  <div className="field">
-                    <label htmlFor="settle-to">Send to</label>
-                    <select
-                      id="settle-to"
-                      value={settleState.toUserId}
-                      onChange={(e) => setSettleState((s) => ({ ...s, toUserId: e.target.value }))}
+                  <div className="mb-5">
+                    <p className="text-xs font-bold uppercase tracking-widest text-[#93c713] mb-3 relative inline-block">Pre-settle</p>
+                    <h2 className="mt-2 text-xl font-bold tracking-[-0.04em]">
+                      Pay ahead, owe less later
+                    </h2>
+                    <p className="mt-1 text-xs text-gray-500">
+                      Send money now — it gets deducted from future debts.
+                      Wallet: <strong className="text-[#65a30d]">{displayCurrency(data.walletBalance)}</strong>
+                    </p>
+                  </div>
+                  <div className="space-y-4">
+                    <div className="field">
+                      <label htmlFor="settle-to">Send to</label>
+                      <select
+                        id="settle-to"
+                        value={settleState.toUserId}
+                        onChange={(e) => setSettleState((s) => ({ ...s, toUserId: e.target.value }))}
+                      >
+                        <option value="">Pick a member</option>
+                        {members.filter((m) => m.id !== data.userId).map((member) => (
+                          <option key={member.id} value={member.id}>
+                            {member.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="field">
+                      <label htmlFor="settle-amount">Amount (₹)</label>
+                      <input
+                        id="settle-amount"
+                        inputMode="decimal"
+                        placeholder="500"
+                        value={settleState.amount}
+                        onChange={(e) => setSettleState((s) => ({ ...s, amount: e.target.value }))}
+                      />
+                    </div>
+                    <button
+                      className="flex bg-black text-white font-bold rounded-lg border-2 border-black hover:bg-[#D4F670] hover:text-black transition-colors shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] items-center gap-2 px-4 py-2 w-full justify-center"
+                      disabled={pending || !settleState.toUserId}
+                      onClick={settleDirectly}
+                      type="button"
                     >
-                      <option value="">Pick a member</option>
-                      {members.filter((m) => m.id !== data.userId).map((member) => (
-                        <option key={member.id} value={member.id}>
-                          {member.name}
-                        </option>
-                      ))}
-                    </select>
+                      {pending ? <><span className="spinner" /> Sending…</> : "Pre-settle from wallet"}
+                    </button>
                   </div>
-                  <div className="field">
-                    <label htmlFor="settle-amount">Amount (₹)</label>
-                    <input
-                      id="settle-amount"
-                      inputMode="decimal"
-                      placeholder="500"
-                      value={settleState.amount}
-                      onChange={(e) => setSettleState((s) => ({ ...s, amount: e.target.value }))}
-                    />
-                  </div>
-                  <button
-                    className="flex bg-black text-white font-bold rounded-lg border-2 border-black hover:bg-[#D4F670] hover:text-black transition-colors shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] items-center gap-2 px-4 py-2 w-full justify-center"
-                    disabled={pending || !settleState.toUserId}
-                    onClick={settleDirectly}
-                    type="button"
-                  >
-                    {pending ? <><span className="spinner" /> Sending…</> : "Pre-settle from wallet"}
-                  </button>
-                </div>
                 </SlideUp>
               </StaggerContainer>
 
               <SlideUp className="bg-[#fdfdf9] border-2 border-black rounded-xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] p-6 space-y-5">
-              <div>
-                <p className="text-xs font-bold uppercase tracking-widest text-[#93c713] mb-3 relative inline-block">Money flow</p>
-                <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-black">
-                  Trace the cash
-                </h2>
-              </div>
-              <div className="member-toggle">
-                {(activeGroup?.moneyFlow.explainability ?? []).map((member) => (
-                  <button
-                    key={member.userId}
-                    className={`px-4 py-2 font-bold text-sm border-2 border-black rounded-full shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-colors hover:-translate-y-0.5 ${focusedFlowUserId === member.userId ? "bg-[#D4F670] text-black" : "bg-white text-gray-600 hover:bg-[#f6f6f6]"}`}
-                    onClick={() => setFocusedFlowUserId(member.userId)}
-                    type="button"
-                  >
-                    {member.userName}
-                  </button>
-                ))}
-              </div>
-              <MoneyFlowDiagram
-                focusedUserId={focusedExplainability?.userId ?? data.userId}
-                suggestions={activeGroup?.moneyFlow.transactions ?? []}
-                currencyCode={currencyCode}
-                rate={exchangeRate}
-              />
-              <div className="space-y-3">
-                {(focusedExplainability?.owes ?? []).length ? (
-                  focusedExplainability?.owes.map((item, index) => (
-                    <div className="bg-white border-2 border-black rounded-xl p-4 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]" key={`${item.counterpartyId}-${index}`}>
-                      <strong className="text-black">
-                        Owes {item.counterpartyName} for {item.description}
-                      </strong>
-                      <p>
-                        {displayCurrency(item.amount)} on{" "}
-                        {new Date(item.date).toLocaleDateString("en-IN")}
-                      </p>
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-widest text-[#93c713] mb-3 relative inline-block">Money flow</p>
+                  <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-black">
+                    Trace the cash
+                  </h2>
+                </div>
+                <div className="member-toggle">
+                  {(activeGroup?.moneyFlow.explainability ?? []).map((member) => (
+                    <button
+                      key={member.userId}
+                      className={`px-4 py-2 font-bold text-sm border-2 border-black rounded-full shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-colors hover:-translate-y-0.5 ${focusedFlowUserId === member.userId ? "bg-[#D4F670] text-black" : "bg-white text-gray-600 hover:bg-[#f6f6f6]"}`}
+                      onClick={() => setFocusedFlowUserId(member.userId)}
+                      type="button"
+                    >
+                      {member.userName}
+                    </button>
+                  ))}
+                </div>
+                <MoneyFlowDiagram
+                  focusedUserId={focusedExplainability?.userId ?? data.userId}
+                  suggestions={activeGroup?.moneyFlow.transactions ?? []}
+                  currencyCode={currencyCode}
+                  rate={exchangeRate}
+                />
+                <div className="space-y-3">
+                  {(focusedExplainability?.owes ?? []).length ? (
+                    focusedExplainability?.owes.map((item, index) => (
+                      <div className="bg-white border-2 border-black rounded-xl p-4 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]" key={`${item.counterpartyId}-${index}`}>
+                        <strong className="text-black">
+                          Owes {item.counterpartyName} for {item.description}
+                        </strong>
+                        <p>
+                          {displayCurrency(item.amount)} on{" "}
+                          {new Date(item.date).toLocaleDateString("en-IN")}
+                        </p>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="empty-state">
+                      No owing records for this member. Clean slate.
                     </div>
-                  ))
-                ) : (
-                  <div className="empty-state">
-                  No owing records for this member. Clean slate.
-                  </div>
-                )}
-              </div>
+                  )}
+                </div>
               </SlideUp>
             </StaggerContainer>
           ) : null}
@@ -2098,118 +2457,118 @@ export function DashboardClient({ data }: { data: DashboardData }) {
           {data.groups.length > 0 && section === "activity" ? (
             <StaggerContainer key="activity" className="w-full">
               <SlideUp className="bg-[#fdfdf9] border-2 border-black rounded-xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] p-6">
-            <div className="mb-5">
-              <p className="text-xs font-bold uppercase tracking-widest text-[#93c713] mb-3 relative inline-block">The feed</p>
-              <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-black">
-                Latest moves in {activeGroup?.name ?? "your groups"}
-              </h2>
-            </div>
-            <div className="activity-list">
-              {activeGroup?.activity.length ? (
-                activeGroup.activity.map((item) => (
-                  <div className="flex gap-4 p-4 bg-white border-2 border-black rounded-lg shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]" key={item.id}>
-                    <div className="w-8 h-8 rounded-full bg-[#D4F670] border-2 border-black flex items-center justify-center font-bold text-xs shadow-[1px_1px_0px_0px_rgba(0,0,0,1)] shrink-0">{groupInitials(item.actorName)}</div>
-                    <div className="flex-1">
-                      <strong className="text-black">{item.title}</strong>
-                      <p>{item.description}</p>
-                    </div>
-                    <div className="flex flex-col items-end gap-1">
-                      <time className="text-xs text-gray-500">{new Date(item.createdAt).toLocaleDateString("en-IN")}</time>
-                      <div className="flex gap-2">
-                        <button onClick={() => handleEditExpenseClicked(item.id)} className="text-xs text-[#65a30d] hover:underline">Edit</button>
-                        <button onClick={() => handleDeleteExpense(item.id)} className="text-xs text-red-500 hover:underline">Delete</button>
-                      </div>
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <div className="empty-state">
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ margin: "0 auto 0.5rem" }}>
-                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
-                  </svg>
-                  Nothing yet. Add some expenses to get the trail started.
+                <div className="mb-5">
+                  <p className="text-xs font-bold uppercase tracking-widest text-[#93c713] mb-3 relative inline-block">The feed</p>
+                  <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-black">
+                    Latest moves in {activeGroup?.name ?? "your groups"}
+                  </h2>
                 </div>
-              )}
-            </div>
-            </SlideUp>
-          </StaggerContainer>
-        ) : null}
+                <div className="activity-list">
+                  {activeGroup?.activity.length ? (
+                    activeGroup.activity.map((item) => (
+                      <div className="flex gap-4 p-4 bg-white border-2 border-black rounded-lg shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]" key={item.id}>
+                        <div className="w-8 h-8 rounded-full bg-[#D4F670] border-2 border-black flex items-center justify-center font-bold text-xs shadow-[1px_1px_0px_0px_rgba(0,0,0,1)] shrink-0">{groupInitials(item.actorName)}</div>
+                        <div className="flex-1">
+                          <strong className="text-black">{item.title}</strong>
+                          <p>{item.description}</p>
+                        </div>
+                        <div className="flex flex-col items-end gap-1">
+                          <time className="text-xs text-gray-500">{new Date(item.createdAt).toLocaleDateString("en-IN")}</time>
+                          <div className="flex gap-2">
+                            <button onClick={() => handleEditExpenseClicked(item.id)} className="text-xs text-[#65a30d] hover:underline">Edit</button>
+                            <button onClick={() => handleDeleteExpense(item.id)} className="text-xs text-red-500 hover:underline">Delete</button>
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="empty-state">
+                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ margin: "0 auto 0.5rem" }}>
+                        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+                      </svg>
+                      Nothing yet. Add some expenses to get the trail started.
+                    </div>
+                  )}
+                </div>
+              </SlideUp>
+            </StaggerContainer>
+          ) : null}
 
           {data.groups.length > 0 && section === "analytics" ? (
             <StaggerContainer key="analytics" className="grid gap-8 grid-cols-1 md:grid-cols-2 w-full">
               <SlideUp className="bg-white border-2 border-black rounded-xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] p-6 min-h-[20rem]">
-              <div className="mb-5">
-                <p className="text-xs font-bold uppercase tracking-widest text-[#93c713] mb-3 relative inline-block">Spending by category</p>
-                <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-black">
-                  Where the money bleeds
-                </h2>
-              </div>
-              <PieChart items={activeGroup?.analytics.byCategory ?? []} currencyCode={currencyCode} rate={exchangeRate} />
+                <div className="mb-5">
+                  <p className="text-xs font-bold uppercase tracking-widest text-[#93c713] mb-3 relative inline-block">Spending by category</p>
+                  <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-black">
+                    Where the money bleeds
+                  </h2>
+                </div>
+                <PieChart items={activeGroup?.analytics.byCategory ?? []} currencyCode={currencyCode} rate={exchangeRate} />
               </SlideUp>
 
               <SlideUp className="bg-white border-2 border-black rounded-xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] p-6 min-h-[20rem]" delay={0.1}>
-              <div className="mb-5">
-                <p className="text-xs font-bold uppercase tracking-widest text-[#93c713] mb-3 relative inline-block">Monthly expenses</p>
-                <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-black">
-                  Burn rate over time
-                </h2>
-              </div>
-              <LineChart
-                points={
-                  activeGroup?.analytics.monthly.length
-                    ? activeGroup.analytics.monthly
-                    : [{ label: "Now", amount: 0 }]
-                }
-                currencyCode={currencyCode}
-                rate={exchangeRate}
-              />
+                <div className="mb-5">
+                  <p className="text-xs font-bold uppercase tracking-widest text-[#93c713] mb-3 relative inline-block">Monthly expenses</p>
+                  <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-black">
+                    Burn rate over time
+                  </h2>
+                </div>
+                <LineChart
+                  points={
+                    activeGroup?.analytics.monthly.length
+                      ? activeGroup.analytics.monthly
+                      : [{ label: "Now", amount: 0 }]
+                  }
+                  currencyCode={currencyCode}
+                  rate={exchangeRate}
+                />
               </SlideUp>
 
               <SlideUp className="bg-white border-2 border-black rounded-xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] p-6 min-h-[20rem] col-span-2" delay={0.2}>
-              <div className="mb-5">
-                <p className="text-xs font-bold uppercase tracking-widest text-[#93c713] mb-3 relative inline-block">Top spenders</p>
-                <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-black">
-                  The big spenders
-                </h2>
-              </div>
-              <BarChart items={activeGroup?.analytics.topSpenders ?? []} currencyCode={currencyCode} rate={exchangeRate} />
+                <div className="mb-5">
+                  <p className="text-xs font-bold uppercase tracking-widest text-[#93c713] mb-3 relative inline-block">Top spenders</p>
+                  <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-black">
+                    The big spenders
+                  </h2>
+                </div>
+                <BarChart items={activeGroup?.analytics.topSpenders ?? []} currencyCode={currencyCode} rate={exchangeRate} />
               </SlideUp>
             </StaggerContainer>
           ) : null}
 
           {data.groups.length > 0 && (section === "dashboard" || section === "whiteboard") ? (
-          <article className="bg-[#fdfdf9] border-2 border-black rounded-xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] p-6">
-            <div className="mb-5">
-              <p className="text-xs font-bold uppercase tracking-widest text-[#93c713] mb-3 relative inline-block">Wallet log</p>
-              <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-black">
-                Your money trail
-              </h2>
-            </div>
-            <div className="flex flex-col gap-2">
-              {data.walletTransactions.length ? (
-                data.walletTransactions.map((transaction) => (
-                  <div className="flex items-center justify-between p-4 bg-white border-2 border-black rounded-xl shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:bg-[#f6f6f6] transition-colors" key={transaction.id}>
-                    <div>
-                      <strong>{transaction.description || transaction.type.replaceAll("_", " ")}</strong>
-                      <p className="text-xs text-gray-500">{new Date(transaction.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</p>
+            <article className="bg-[#fdfdf9] border-2 border-black rounded-xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] p-6 mt-10">
+              <div className="mb-5">
+                <p className="text-xs font-bold uppercase tracking-widest text-[#93c713] mb-3 relative inline-block">Wallet log</p>
+                <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-black">
+                  Your money trail
+                </h2>
+              </div>
+              <div className="flex flex-col gap-2">
+                {data.walletTransactions.length ? (
+                  data.walletTransactions.map((transaction) => (
+                    <div className="flex items-center justify-between p-4 bg-white border-2 border-black rounded-xl shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:bg-[#f6f6f6] transition-colors" key={transaction.id}>
+                      <div>
+                        <strong>{transaction.description || transaction.type.replaceAll("_", " ")}</strong>
+                        <p className="text-xs text-gray-500">{new Date(transaction.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</p>
+                      </div>
+                      <strong className={transaction.amount >= 0 ? "text-green-500" : "text-red-500"}>{transaction.amount >= 0 ? "+" : ""}{displayCurrency(transaction.amount)}</strong>
                     </div>
-                    <strong className={transaction.amount >= 0 ? "text-green-500" : "text-red-500"}>{transaction.amount >= 0 ? "+" : ""}{displayCurrency(transaction.amount)}</strong>
+                  ))
+                ) : (
+                  <div className="empty-state">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ margin: "0 auto 0.5rem" }}>
+                      <rect x="1" y="4" width="22" height="16" rx="2" ry="2" />
+                      <line x1="1" y1="10" x2="23" y2="10" />
+                    </svg>
+                    Wallet is empty. Add some funds to get rolling.
                   </div>
-                ))
-              ) : (
-                <div className="empty-state">
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ margin: "0 auto 0.5rem" }}>
-                    <rect x="1" y="4" width="22" height="16" rx="2" ry="2" />
-                    <line x1="1" y1="10" x2="23" y2="10" />
-                  </svg>
-                  Wallet is empty. Add some funds to get rolling.
-                </div>
-              )}
-            </div>
-          </article>
+                )}
+              </div>
+            </article>
           ) : null}
 
-        {/* ── Templates Section ── */}
+          {/* ── Templates Section ── */}
           {section === "templates" ? (
             <StaggerContainer key="templates" className="w-full">
               <SlideUp className="bg-[#fdfdf9] border-2 border-black rounded-xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] p-6">
@@ -2223,7 +2582,7 @@ export function DashboardClient({ data }: { data: DashboardData }) {
                   {allTemplates.map(t => (
                     <div
                       key={t.id}
-                      className="relative group flex flex-col gap-2 p-4 rounded-[var(--radius-lg)] border border-black bg-[var(--surface)] hover:border-[#D4F670] hover:bg-[#f6f6f6] transition-all cursor-pointer"
+                      className="relative group flex flex-col gap-2 p-4 rounded-xl border-2 border-black bg-white hover:bg-[#D4F670] hover:-translate-y-1 transition-all shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] cursor-pointer"
                       onClick={() => {
                         setExpenseState(s => ({ ...s, description: t.description, amount: t.amount, category: t.category }));
                         setSection("dashboard");
@@ -2291,7 +2650,7 @@ export function DashboardClient({ data }: { data: DashboardData }) {
                   </div>
                   <button
                     type="button"
-                    className="flex bg-black text-white font-bold rounded-lg border-2 border-black hover:bg-[#D4F670] hover:text-black transition-colors shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] items-center gap-2 px-4 py-2 w-full"
+                    className="flex justify-center items-center gap-2 w-full py-3 px-4 bg-black text-white font-bold text-lg rounded-xl border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:bg-[#D4F670] hover:text-black hover:-translate-y-1 transition-all disabled:opacity-50 disabled:cursor-not-allowed group relative overflow-hidden"
                     disabled={!newTemplateName.trim() || !newTemplateAmount}
                     onClick={() => {
                       if (!newTemplateName.trim() || !newTemplateAmount) return;
@@ -2315,114 +2674,114 @@ export function DashboardClient({ data }: { data: DashboardData }) {
             </StaggerContainer>
           ) : null}
 
-        {/* ── Whiteboard Section ── */}
+          {/* ── Whiteboard Section ── */}
           {data.groups.length > 0 && section === "whiteboard" ? (
             <StaggerContainer key="whiteboard" className="w-full">
               <SlideUp className="bg-[#fdfdf9] border-2 border-black rounded-xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] p-6 space-y-5">
-            <div className="mb-3">
-              <p className="text-xs font-bold uppercase tracking-widest text-[#93c713] mb-3 relative inline-block">Whiteboard</p>
-              <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-black">Group Notes</h2>
-            </div>
+                <div className="mb-3">
+                  <p className="text-xs font-bold uppercase tracking-widest text-[#93c713] mb-3 relative inline-block">Whiteboard</p>
+                  <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-black">Group Notes</h2>
+                </div>
 
-            {/* Invite link sharing */}
-            <div className="space-y-3">
-              <p className="text-xs font-bold uppercase tracking-widest text-[#93c713] mb-3 relative inline-block">Share invite</p>
-              <div className="invite-share-row">
-                <input readOnly value={inviteLink} placeholder="Generate an invite link..." />
-                <button className="flex bg-black text-white font-bold rounded-lg border-2 border-black hover:bg-[#D4F670] hover:text-black transition-colors shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] items-center gap-2 px-4 py-2" onClick={handleGenerateInvite} disabled={pending} type="button">
-                  {inviteLink ? "Regenerate" : "Generate"}
-                </button>
-              </div>
-              {inviteLink && (
-                <div className="mt-3 flex items-center gap-4">
-                  <div
-                    className="bg-white p-2 rounded-lg shadow border border-black cursor-pointer hover:shadow-md transition-shadow shrink-0"
-                    onClick={() => navigator.clipboard.writeText(inviteLink)}
-                    title="Click to copy link"
-                  >
-                    <Image
-                      src={`https://api.qrserver.com/v1/create-qr-code/?size=110x110&data=${encodeURIComponent(inviteLink)}`}
-                      alt="Invite QR Code"
-                      className="block h-[90px] w-[90px]"
-                      height={90}
-                      unoptimized
-                      width={90}
-                    />
+                {/* Invite link sharing */}
+                <div className="space-y-3">
+                  <p className="text-xs font-bold uppercase tracking-widest text-[#93c713] mb-3 relative inline-block">Share invite</p>
+                  <div className="invite-share-row">
+                    <input readOnly value={inviteLink} placeholder="Generate an invite link..." />
+                    <button className="flex bg-black text-white font-bold rounded-lg border-2 border-black hover:bg-[#D4F670] hover:text-black transition-colors shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] items-center gap-2 px-4 py-2" onClick={handleGenerateInvite} disabled={pending} type="button">
+                      {inviteLink ? "Regenerate" : "Generate"}
+                    </button>
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs text-gray-500 break-all leading-relaxed">{inviteLink}</p>
-                    <button type="button" className="mt-2 text-xs text-[#65a30d] hover:underline" onClick={() => navigator.clipboard.writeText(inviteLink)}>Copy link</button>
+                  {inviteLink && (
+                    <div className="mt-3 flex items-center gap-4">
+                      <div
+                        className="bg-white p-2 rounded-lg shadow border border-black cursor-pointer hover:shadow-md transition-shadow shrink-0"
+                        onClick={() => navigator.clipboard.writeText(inviteLink)}
+                        title="Click to copy link"
+                      >
+                        <Image
+                          src={`https://api.qrserver.com/v1/create-qr-code/?size=110x110&data=${encodeURIComponent(inviteLink)}`}
+                          alt="Invite QR Code"
+                          className="block h-[90px] w-[90px]"
+                          height={90}
+                          unoptimized
+                          width={90}
+                        />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs text-gray-500 break-all leading-relaxed">{inviteLink}</p>
+                        <button type="button" className="mt-2 text-xs text-[#65a30d] hover:underline" onClick={() => navigator.clipboard.writeText(inviteLink)}>Copy link</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="divider" />
+
+                {/* Budget settings */}
+                <div className="space-y-3">
+                  <p className="text-xs font-bold uppercase tracking-widest text-[#93c713] mb-3 relative inline-block">Monthly budget</p>
+                  <div className="invite-share-row">
+                    <input inputMode="decimal" value={budgetInput} onChange={(e) => setBudgetInput(e.target.value)} placeholder="e.g. 10000" />
+                    <button className="flex bg-black text-white font-bold rounded-lg border-2 border-black hover:bg-[#D4F670] hover:text-black transition-colors shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] items-center gap-2 px-4 py-2" onClick={handleSetBudget} disabled={pending} type="button">
+                      Set limit
+                    </button>
                   </div>
                 </div>
-              )}
-            </div>
 
-            <div className="divider" />
+                <div className="divider" />
 
-            {/* Budget settings */}
-            <div className="space-y-3">
-              <p className="text-xs font-bold uppercase tracking-widest text-[#93c713] mb-3 relative inline-block">Monthly budget</p>
-              <div className="invite-share-row">
-                <input inputMode="decimal" value={budgetInput} onChange={(e) => setBudgetInput(e.target.value)} placeholder="e.g. 10000" />
-                <button className="flex bg-black text-white font-bold rounded-lg border-2 border-black hover:bg-[#D4F670] hover:text-black transition-colors shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] items-center gap-2 px-4 py-2" onClick={handleSetBudget} disabled={pending} type="button">
-                  Set limit
-                </button>
-              </div>
-            </div>
+                {/* Add note */}
+                <div className="flex gap-3 items-start">
+                  <textarea
+                    value={noteText}
+                    onChange={(e) => setNoteText(e.target.value)}
+                    placeholder="Write a note for your group..."
+                    className="w-full min-h-[48px] max-h-32 bg-white border-2 border-black rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#D4F670] resize-y shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+                  />
+                  <button className="flex shrink-0 bg-black text-white font-bold rounded-lg border-2 border-black hover:bg-[#D4F670] hover:text-black transition-colors shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] items-center px-6 py-3 disabled:opacity-50 disabled:cursor-not-allowed" onClick={handleAddNote} disabled={pending || !noteText.trim()} type="button">
+                    Post
+                  </button>
+                </div>
 
-            <div className="divider" />
-
-            {/* Add note */}
-            <div className="flex gap-3 items-start">
-              <textarea 
-                value={noteText} 
-                onChange={(e) => setNoteText(e.target.value)} 
-                placeholder="Write a note for your group..." 
-                className="w-full min-h-[48px] max-h-32 bg-white border-2 border-black rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#D4F670] resize-y shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
-              />
-              <button className="flex shrink-0 bg-black text-white font-bold rounded-lg border-2 border-black hover:bg-[#D4F670] hover:text-black transition-colors shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] items-center px-6 py-3 disabled:opacity-50 disabled:cursor-not-allowed" onClick={handleAddNote} disabled={pending || !noteText.trim()} type="button">
-                Post
-              </button>
-            </div>
-
-            {/* Notes list */}
-            <div className="grid gap-4 mt-6">
-              {notes.length === 0 ? (
-                <div className="text-gray-400 italic py-8 text-center border-2 border-dashed border-gray-300 rounded-xl w-full">No notes yet. Be the first to post!</div>
-              ) : (
-                notes.map((note) => (
-                  <div className="bg-[#fdfdf9] border-2 border-black rounded-xl p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] flex flex-col gap-2 relative group transition-transform hover:-translate-y-1" key={note.id}>
-                    <div className="flex justify-between items-start w-full pr-12">
-                      <span className="font-bold text-black flex items-center gap-2">
-                        <span className="w-6 h-6 rounded-full bg-[#D4F670] border-2 border-black flex items-center justify-center text-[10px] shadow-[1px_1px_0px_0px_rgba(0,0,0,1)] text-black">
-                          {groupInitials(members.find((m) => m.id === note.authorId)?.name ?? "Unknown")}
-                        </span>
-                        {members.find((m) => m.id === note.authorId)?.name ?? "Unknown"}
-                      </span>
-                      <span className="text-xs font-bold text-gray-500 uppercase tracking-widest">{formatDate(note.createdAt)}</span>
-                    </div>
-                    <div className="text-black text-sm leading-relaxed mt-1">{note.content}</div>
-                    {note.authorId === data.userId && (
-                      <button className="absolute top-4 right-4 text-xs font-bold text-red-500 hover:text-red-700 hover:underline opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => handleDeleteNote(note.id)} type="button">
-                        Delete
-                      </button>
-                    )}
-                  </div>
-                ))
-              )}
-            </div>
-            </SlideUp>
-          </StaggerContainer>
-        ) : null}
+                {/* Notes list */}
+                <div className="grid gap-4 mt-6">
+                  {notes.length === 0 ? (
+                    <div className="text-gray-400 italic py-8 text-center border-2 border-dashed border-gray-300 rounded-xl w-full">No notes yet. Be the first to post!</div>
+                  ) : (
+                    notes.map((note) => (
+                      <div className="bg-[#fdfdf9] border-2 border-black rounded-xl p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] flex flex-col gap-2 relative group transition-transform hover:-translate-y-1" key={note.id}>
+                        <div className="flex justify-between items-start w-full pr-12">
+                          <span className="font-bold text-black flex items-center gap-2">
+                            <span className="w-6 h-6 rounded-full bg-[#D4F670] border-2 border-black flex items-center justify-center text-[10px] shadow-[1px_1px_0px_0px_rgba(0,0,0,1)] text-black">
+                              {groupInitials(members.find((m) => m.id === note.authorId)?.name ?? "Unknown")}
+                            </span>
+                            {members.find((m) => m.id === note.authorId)?.name ?? "Unknown"}
+                          </span>
+                          <span className="text-xs font-bold text-gray-500 uppercase tracking-widest">{formatDate(note.createdAt)}</span>
+                        </div>
+                        <div className="text-black text-sm leading-relaxed mt-1">{note.content}</div>
+                        {note.authorId === data.userId && (
+                          <button className="absolute top-4 right-4 text-xs font-bold text-red-500 hover:text-red-700 hover:underline opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => handleDeleteNote(note.id)} type="button">
+                            Delete
+                          </button>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </SlideUp>
+            </StaggerContainer>
+          ) : null}
         </AnimatePresence>
 
         {/* ── AI Chatbot FAB + Drawer ── */}
         {data.groups.length > 0 && (
           <>
-            <motion.button 
-              className="fixed bottom-6 right-6 w-14 h-14 bg-[#D4F670] border-2 border-black rounded-full flex items-center justify-center shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] text-black z-50 hover:bg-[#b5d54a] transition-colors" 
-              onClick={() => setChatOpen(!chatOpen)} 
-              type="button" 
+            <motion.button
+              className="fixed bottom-[90px] lg:bottom-6 right-6 w-14 h-14 bg-[#D4F670] border-2 border-black rounded-full flex items-center justify-center shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] text-black z-50 hover:bg-[#b5d54a] transition-colors"
+              onClick={() => setChatOpen(!chatOpen)}
+              type="button"
               aria-label="AI Chat"
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
@@ -2437,15 +2796,15 @@ export function DashboardClient({ data }: { data: DashboardData }) {
 
             <AnimatePresence>
               {chatOpen && (
-                <motion.div 
-                  className="fixed bottom-24 right-6 w-[340px] max-w-[calc(100vw-3rem)] h-[500px] max-h-[70vh] bg-white border-2 border-black rounded-2xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] flex flex-col z-50 overflow-hidden"
+                <motion.div
+                  className="fixed bottom-[160px] lg:bottom-24 right-6 w-[340px] max-w-[calc(100vw-3rem)] h-[500px] max-h-[60vh] lg:max-h-[70vh] bg-white border-2 border-black rounded-2xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] flex flex-col z-50 overflow-hidden"
                   initial={{ opacity: 0, y: 40, scale: 0.96, filter: "blur(4px)" }}
                   animate={{ opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }}
                   exit={{ opacity: 0, y: 20, scale: 0.96, filter: "blur(4px)" }}
                   transition={{ type: "spring", stiffness: 350, damping: 25 }}
                 >
                   <div className="p-4 bg-[#D4F670] border-b-2 border-black flex justify-between items-center">
-                    <h3 className="font-black text-lg text-black">PayZen AI</h3>
+                    <h3 className="font-black text-lg text-black">Pay Zen AI</h3>
                     <button className="text-2xl font-black text-black hover:opacity-70 leading-none" onClick={() => setChatOpen(false)} type="button">&times;</button>
                   </div>
                   <div className="flex gap-2 p-3 border-b-2 border-black bg-[#fdfdf9] overflow-x-auto hide-scrollbars whitespace-nowrap scroll-smooth">
@@ -2454,12 +2813,12 @@ export function DashboardClient({ data }: { data: DashboardData }) {
                   </div>
                   <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3 bg-[#fdfdf9]">
                     {chatMessages.length === 0 && (
-                      <div className="p-3 text-sm rounded-xl border-2 border-black max-w-[85%] bg-white rounded-tl-none self-start shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] text-black leading-relaxed">Hi! I&apos;m your PayZen financial advisor. Ask me about your spending patterns, savings strategies, or budget insights.</div>
+                      <div className="p-3 text-sm rounded-xl border-2 border-black max-w-[85%] bg-white rounded-tl-none self-start shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] text-black leading-relaxed">Hi! I&apos;m your Pay Zen financial advisor. Ask me about your spending patterns, savings strategies, or budget insights.</div>
                     )}
                     <AnimatePresence initial={false}>
                       {chatMessages.map((msg, i) => (
-                        <motion.div 
-                          key={i} 
+                        <motion.div
+                          key={i}
                           className={`p-3 text-sm rounded-xl border-2 border-black max-w-[85%] shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] leading-relaxed ${msg.role === "user" ? "bg-[#D4F670] rounded-tr-none self-end text-black font-medium" : "bg-white rounded-tl-none self-start text-black"}`}
                           initial={{ opacity: 0, y: 10, scale: 0.95 }}
                           animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -2469,7 +2828,7 @@ export function DashboardClient({ data }: { data: DashboardData }) {
                         </motion.div>
                       ))}
                       {chatPending && (
-                        <motion.div 
+                        <motion.div
                           className="p-3 text-sm rounded-xl border-2 border-black max-w-[85%] bg-white rounded-tl-none self-start shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] text-black flex items-center gap-2"
                           initial={{ opacity: 0, scale: 0.9 }}
                           animate={{ opacity: 1, scale: 1 }}
@@ -2498,28 +2857,28 @@ export function DashboardClient({ data }: { data: DashboardData }) {
       </section>
 
       {/* ── Mobile Bottom Nav ── */}
-      <nav className="mobile-nav">
+      <nav className="lg:hidden fixed bottom-0 left-0 right-0 bg-white border-t-2 border-black z-50 flex items-center justify-around h-[70px] pb-safe px-2 overflow-x-auto hide-scrollbars">
         <AnimatePresence>
-          {sections.slice(0, 5).map((item) => {
+          {sections.map((item) => {
             const Icon = sectionIcons[item.key];
             const isActive = section === item.key;
             return (
               <button
                 key={item.key}
-                className={`mobile-nav__btn relative ${isActive ? "text-[#65a30d]" : "text-gray-500"}`}
+                className={`relative flex-1 h-full flex flex-col items-center justify-center transition-colors ${isActive ? "text-black" : "text-gray-500 hover:text-black"}`}
                 onClick={() => setSection(item.key)}
                 type="button"
               >
                 {isActive && (
                   <motion.div
                     layoutId="mobileActiveTab"
-                    className="absolute inset-0 -z-10 bg-[var(--surface-strong)] rounded-full"
+                    className="absolute inset-x-2 top-2 bottom-2 -z-10 bg-[#D4F670] border-2 border-black rounded-xl shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
                     transition={{ type: "spring", stiffness: 300, damping: 25 }}
                   />
                 )}
-                <div className="relative z-10 flex flex-col items-center">
+                <div className="relative z-10 flex flex-col items-center gap-1">
                   <Icon />
-                  <span className="text-[10px] sm:text-xs mt-1">{item.label}</span>
+                  <span className="text-[10px] font-bold uppercase tracking-wider">{item.label}</span>
                 </div>
               </button>
             );

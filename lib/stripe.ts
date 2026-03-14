@@ -34,7 +34,7 @@ export async function createCheckoutSession({
       {
         price_data: {
           currency: "inr",
-          product_data: { name: "PayZen Wallet Top-Up" },
+          product_data: { name: "Pay Zen Wallet Top-Up" },
           unit_amount: Math.round(amount * 100),
         },
         quantity: 1,

@@ -1,6 +1,6 @@
-# PayZen
+# Pay Zen
 
-PayZen is a shared-expense workspace built with Next.js, Prisma, Auth.js, and Razorpay. It supports:
+Pay Zen is a shared-expense workspace built with Next.js, Prisma, Auth.js, and Razorpay. It supports:
 
 - email/password authentication
 - automatic wallet provisioning on signup

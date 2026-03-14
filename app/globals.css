@@ -140,6 +140,48 @@ button, input, select, textarea { font: inherit; }
   color: white;
 }
 
+/* ───────────────────────────────────────────────
+   FORMS & FIELDS
+   ─────────────────────────────────────────────── */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  margin-bottom: 0.5rem;
+}
+
+.field label {
+  font-size: 0.875rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #374151;
+}
+
+.field input,
+.field select,
+.field textarea {
+  background-color: #fdfdf9;
+  border: 2px solid #000;
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  box-shadow: inset 2px 2px 0px 0px rgba(0,0,0,0.05);
+  transition: all 0.2s;
+  outline: none;
+  min-width: 0;
+  width: 100%;
+  color: #000;
+}
+
+.field input:focus,
+.field select:focus,
+.field textarea:focus {
+  outline: none;
+  border-color: #000;
+  box-shadow: 0 0 0 2px #D4F670, inset 2px 2px 0px 0px rgba(0,0,0,0.05);
+}
+
 /* Custom scrollbar */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -1734,6 +1776,19 @@ textarea:focus {
 .onboarding-form-card,
 .onboarding-cta {
   background: var(--surface-strong);
+}
+
+.onboarding-forms {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  margin-top: 1.5rem;
+}
+
+.onboarding-form-card {
+  display: grid;
+  gap: 1rem;
+  padding: 1.25rem;
 }
 
 .metric-card h3 {

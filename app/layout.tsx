@@ -2,9 +2,14 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "PayZen | Shared Money, Drawn Clearly",
+  title: "Pay Zen | Shared Money, Drawn Clearly",
   description:
     "A handwritten-style shared expense workspace for groups, wallets, settlements, notes, and insights.",
+  icons: {
+    icon: "/logo.png",
+    apple: "/logo.png",
+    shortcut: "/logo.png",
+  },
 };
 
 export default function RootLayout({

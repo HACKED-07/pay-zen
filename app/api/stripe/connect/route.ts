@@ -54,7 +54,7 @@ export async function POST(req: Request) {
   } catch (error: any) {
     console.error("Stripe Connect Onboarding Error:", error);
     return NextResponse.json(
-      { error: "Failed to generate onboarding link" },
+      { error: error?.message || "Failed to generate onboarding link" },
       { status: 500 }
     );
   }
