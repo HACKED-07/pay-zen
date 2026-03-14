@@ -1,36 +1,46 @@
 # Pay Zen
 
-Pay Zen is a shared-expense workspace built with Next.js, Prisma, Auth.js, and Razorpay. It supports:
+Pay Zen is a shared-expense workspace built with Next.js, Prisma, Auth.js (NextAuth Beta), and Stripe. Designed with a Neo-Brutalist aesthetic, it supports:
 
-- email/password authentication
-- automatic wallet provisioning on signup
-- a starter group for tracking shared bills
-- equal-split expense creation
-- live settlement suggestions
-- wallet top-ups through Razorpay Checkout
-- wallet-to-wallet settlement execution inside the app
+- **Authentication**: Email/password and Google OAuth
+- **Automatic Setup**: Wallet provisioning on signup, with a starter group for tracking shared bills
+- **Expense Tracking**: Equal-split expense creation and group ledgers
+- **Live Settlements**: Settlement suggestions between group members
+- **Wallet and Payments**: Wallet top-ups through Stripe Checkout, and wallet-to-wallet settlement execution directly inside the app
+- **Notifications**: Email notifications (integrated via Resend)
 
 ## Setup
 
-1. Copy [`.env.example`](/Users/hrishikeshpatel/Desktop/Folder/projects/pay-zen/.env.example) to `.env` and fill in your values.
-2. Run `npm install`.
-3. Run `npx prisma migrate deploy`.
-4. Run `npm run dev`.
+1. Copy `.env.example` to `.env` and fill in your values.
+2. Run `npm install` to install dependencies.
+3. Run `npm run prisma:generate` to generate the Prisma client.
+4. Run `npm run prisma:migrate:deploy` to apply the database migrations.
+5. Run `npm run dev` to start the development server.
 
-## Razorpay
+## Environment Variables
 
-Set these variables to enable payments:
+In addition to your Postgres database (`DATABASE_URL`) and NextAuth setup (`AUTH_SECRET`), Pay Zen optionally uses the following services:
 
-- `RAZORPAY_KEY_ID`
-- `RAZORPAY_KEY_SECRET`
-- `NEXT_PUBLIC_RAZORPAY_KEY_ID`
+### Stripe Checkout
+Set these variables to enable wallet top-ups:
+- `STRIPE_SECRET_KEY`
+- `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`
 
-Without them, the dashboard still works but the Razorpay checkout button stays disabled.
+*(Without them, the dashboard still works but top-ups via Stripe will be disabled or fail.)*
+
+### Google OAuth
+To use Google for login, set:
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+
+### Email Notifications
+Used for various application emails via Resend:
+- `RESEND_API_KEY`
 
 ## End-to-End Flow
 
-1. Register a user.
-2. Log in.
-3. Add funds to the wallet with Razorpay.
+1. Register a user (via Email or Google Auth).
+2. Log in to the dashboard.
+3. Top up the wallet using Stripe.
 4. Add expenses to the group ledger.
-5. Use the suggested settlement actions to transfer wallet balance between members.
+5. Review the suggested settlement actions to seamlessly transfer wallet balance between members.

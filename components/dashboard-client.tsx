@@ -1591,7 +1591,7 @@ export function DashboardClient({ data }: { data: DashboardData }) {
                     </div>
                   </>
                 ) : (
-                  <div className="rounded-xl border-2 border-dashed border-black bg-white p-4 text-sm text-gray-600">
+                  <div className="rounded-xl border-2 border-black bg-white p-6 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] text-[#65a30d] font-bold text-center flex flex-col items-center justify-center min-h-[140px]">
                     No suggested transfers right now. Your balances look clean, so you can move on to expenses, notes, or invites.
                   </div>
                 )}

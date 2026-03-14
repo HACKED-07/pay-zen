@@ -1,10 +1,14 @@
-import { prisma } from "./lib/prisma"
+import { prisma } from "./lib/prisma";
 
 async function main() {
-    try {
-        console.log(Object.keys(prisma.groupMember.fields))
-    } catch {
-        console.log("No fields info")
-    }
+  console.log("Testing prisma query...");
+  try {
+    const user = await prisma.user.findFirst();
+    console.log("Query successful:");
+    console.log(user);
+  } catch (err) {
+    console.error("Prisma error:", err);
+  }
 }
-main()
+
+main().catch(console.error);
