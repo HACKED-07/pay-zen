@@ -1,6 +1,7 @@
 "use server";
 
-import { prisma } from "@/prisma/lib/prisma";
+import { prisma } from "@/lib/prisma";
+import { generateInviteCode } from "@/lib/group";
 import bcrypt from "bcryptjs";
 
 export async function registerUser(formData: FormData) {
@@ -32,15 +33,41 @@ export async function registerUser(formData: FormData) {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     // 4. Save the user to the database
-    await prisma.user.create({
-      data: {
-        name,
-        email,
-        password: hashedPassword,
-      },
+    await prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: {
+          name,
+          email,
+          password: hashedPassword,
+        },
+      });
+
+      await tx.wallet.create({
+        data: {
+          userId: user.id,
+          balance: 0,
+        },
+      });
+
+      const group = await tx.group.create({
+        data: {
+          name: `${name || email.split("@")[0]}'s Ledger`,
+          description:
+            "Your starter group for tracking shared bills and wallet settlements.",
+          inviteCode: generateInviteCode(),
+        },
+      });
+
+      await tx.groupMember.create({
+        data: {
+          groupId: group.id,
+          userId: user.id,
+          role: "ADMIN",
+        },
+      });
     });
 
-    return { success: "Account created successfully! You can now log in." };
+    return { success: "Account created. Your wallet and starter workspace are ready." };
   } catch (error) {
     console.error("Registration error:", error);
     return { error: "Something went wrong. Please try again." };

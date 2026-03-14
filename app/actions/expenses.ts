@@ -1,7 +1,7 @@
 "use server";
 
 import { auth } from "@/auth";
-import { SplitMethod } from "@/generated/prisma/enums";
+import { ExpenseCategory, SplitMethod } from "@/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
 
 type SplitInput = {
@@ -14,6 +14,7 @@ type AddExpensePayload = {
   description: string;
   amount: number;
   payerId: string;
+  category: ExpenseCategory;
   splitMethod: SplitMethod;
   participants: SplitInput[];
 };
@@ -25,7 +26,15 @@ export async function addExpense(data: AddExpensePayload) {
     return { error: "Unauthorized. Please log in." };
   }
 
-  const { groupId, description, amount, payerId, splitMethod, participants } =
+  const {
+    groupId,
+    description,
+    amount,
+    payerId,
+    category,
+    splitMethod,
+    participants,
+  } =
     data;
 
   // 2. Basic Validation
@@ -48,7 +57,7 @@ export async function addExpense(data: AddExpensePayload) {
         (amount - baseAmount * participants.length) * 100,
       );
 
-      participants.forEach((p, index) => {
+      participants.forEach((p) => {
         let userAmount = baseAmount;
         // Give the leftover pennies to the first few users
         if (remainder > 0) {
@@ -106,6 +115,7 @@ export async function addExpense(data: AddExpensePayload) {
           description,
           amount,
           payerId,
+          category,
           splitMethod,
         },
       });

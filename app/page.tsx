@@ -1,65 +1,230 @@
-import Image from "next/image";
+import Link from "next/link";
+import { auth, signOut } from "@/auth";
+import { DashboardClient } from "@/components/dashboard-client";
+import { getDashboardData } from "@/lib/dashboard";
 
-export default function Home() {
+export default async function Home() {
+  const session = await auth();
+
+  if (!session?.user?.id) {
+    return (
+      <main className="min-h-screen overflow-hidden">
+        {/* Ambient background orbs */}
+        <div className="pointer-events-none fixed inset-0 -z-10">
+          <div
+            className="absolute left-[-10%] top-[-5%] h-[500px] w-[500px] rounded-full"
+            style={{
+              background:
+                "radial-gradient(circle, rgba(0,212,170,0.12), transparent 65%)",
+              animation: "orbFloat 12s ease-in-out infinite",
+            }}
+          />
+          <div
+            className="absolute right-[-5%] top-[20%] h-[400px] w-[400px] rounded-full"
+            style={{
+              background:
+                "radial-gradient(circle, rgba(245,166,35,0.1), transparent 65%)",
+              animation: "orbFloat 14s ease-in-out infinite reverse",
+            }}
+          />
+          <div
+            className="absolute bottom-[10%] left-[30%] h-[350px] w-[350px] rounded-full"
+            style={{
+              background:
+                "radial-gradient(circle, rgba(0,150,255,0.08), transparent 65%)",
+              animation: "orbFloat 10s ease-in-out infinite 3s",
+            }}
+          />
+        </div>
+
+        <section className="relative mx-auto flex min-h-screen w-full max-w-7xl flex-col justify-between px-6 py-8 sm:px-10 lg:px-12">
+          <header
+            className="flex items-center justify-between"
+            style={{ animation: "fadeInUp 0.5s ease-out" }}
+          >
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.32em] text-[var(--accent)]">
+                PayZen
+              </p>
+              <h1 className="mt-1.5 text-lg font-semibold text-[var(--text)]">
+                Calm finances for shared plans
+              </h1>
+            </div>
+            <div className="flex items-center gap-3">
+              <Link className="secondary-button" href="/login">
+                Log in
+              </Link>
+              <Link className="primary-button" href="/register">
+                Create account
+              </Link>
+            </div>
+          </header>
+
+          <div className="grid gap-12 py-16 lg:grid-cols-[1.15fr_0.85fr] lg:items-center">
+            <div className="space-y-8">
+              <div
+                className="pill-badge"
+                style={{ animationDelay: "0.1s" }}
+              >
+                Premium fintech experience
+              </div>
+              <div className="space-y-6">
+                <h2
+                  className="max-w-3xl text-5xl font-extrabold leading-[1.02] tracking-[-0.05em] sm:text-6xl"
+                  style={{
+                    background:
+                      "linear-gradient(135deg, var(--text-strong) 0%, var(--accent) 60%, var(--accent-soft) 100%)",
+                    WebkitBackgroundClip: "text",
+                    WebkitTextFillColor: "transparent",
+                    backgroundClip: "text",
+                    animation: "fadeInUp 0.6s ease-out 0.15s both",
+                  }}
+                >
+                  Split trips, settle dues, and fund your wallet through
+                  Stripe. Zero awkward texts.
+                </h2>
+                <p
+                  className="max-w-2xl text-lg leading-8 text-[var(--muted)]"
+                  style={{ animation: "fadeInUp 0.6s ease-out 0.25s both" }}
+                >
+                  PayZen is the operating system for shared money:
+                  structured groups, real-time balances, smart reporting, and
+                  a wallet that settles debts without the awkward conversations.
+                </p>
+              </div>
+
+              <div
+                className="flex flex-wrap gap-4"
+                style={{ animation: "fadeInUp 0.6s ease-out 0.35s both" }}
+              >
+                <Link className="primary-button" href="/register">
+                  Launch your workspace
+                </Link>
+                <Link className="secondary-button" href="/login">
+                  Enter dashboard
+                </Link>
+              </div>
+
+              <div
+                className="grid gap-3 sm:grid-cols-3"
+                style={{ animation: "fadeInUp 0.6s ease-out 0.45s both" }}
+              >
+                <article className="feature-card">
+                  <p className="feature-value" style={{ color: "var(--accent)" }}>
+                    Live
+                  </p>
+                  <p className="feature-label">
+                    Real-time balances with optimized settlement paths
+                  </p>
+                </article>
+                <article className="feature-card">
+                  <p className="feature-value" style={{ color: "var(--accent-soft)" }}>
+                    Stripe
+                  </p>
+                  <p className="feature-label">
+                    Secure wallet top-ups via Stripe Checkout
+                  </p>
+                </article>
+                <article className="feature-card">
+                  <p className="feature-value" style={{ color: "var(--accent)" }}>
+                    Clear
+                  </p>
+                  <p className="feature-label">
+                    Expenses, transfers, and history — one clean dashboard
+                  </p>
+                </article>
+              </div>
+            </div>
+
+            <div
+              className="hero-panel"
+              style={{ animation: "fadeInUp 0.8s ease-out 0.3s both" }}
+            >
+              <div className="hero-panel__top">
+                <div>
+                  <p className="text-sm uppercase tracking-[0.3em] text-[var(--muted)]">
+                    Theme
+                  </p>
+                  <h3 className="mt-2 text-2xl font-bold text-[var(--text-strong)]">
+                    Editorial finance, not template UI
+                  </h3>
+                </div>
+                <div className="status-dot">
+                  <span />
+                  Wallet synced
+                </div>
+              </div>
+
+              <div className="hero-ledger">
+                <div className="hero-ledger__row">
+                  <span>Goa retreat</span>
+                  <strong>₹18,400</strong>
+                </div>
+                <div className="hero-ledger__row">
+                  <span>Pending settlement</span>
+                  <strong>₹3,200</strong>
+                </div>
+                <div className="hero-ledger__row">
+                  <span>Wallet top-up</span>
+                  <strong>₹5,000</strong>
+                </div>
+              </div>
+
+              <div className="hero-metrics">
+                <div>
+                  <p>Team confidence</p>
+                  <h4>98%</h4>
+                </div>
+                <div>
+                  <p>Avg settlement</p>
+                  <h4>under 1 min</h4>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
+  const dashboardData = await getDashboardData(session.user.id);
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
+    <main className="mx-auto min-h-screen w-full max-w-7xl px-6 py-8 sm:px-10 lg:px-12">
+      <header
+        className="mb-8 flex flex-col gap-6 rounded-[var(--radius-xl)] border border-[var(--glass-border)] p-6 shadow-[var(--shadow-md)] backdrop-blur-xl sm:flex-row sm:items-center sm:justify-between"
+        style={{
+          background:
+            "radial-gradient(ellipse at top right, rgba(0,212,170,0.06), transparent 50%), var(--bg-secondary)",
+          animation: "fadeInUp 0.5s ease-out",
+        }}
+      >
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.32em] text-[var(--accent)]">
+            PayZen Workspace
+          </p>
+          <h1 className="mt-2 text-3xl font-bold tracking-[-0.04em] text-[var(--text-strong)]">
+            Welcome back, {dashboardData.userName}
           </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+          <p className="mt-2 max-w-2xl text-sm leading-7 text-[var(--muted)]">
+            Review your balances, send money from your wallet, and clear
+            the next debt without leaving the dashboard.
           </p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+
+        <form
+          action={async () => {
+            "use server";
+            await signOut({ redirectTo: "/" });
+          }}
+        >
+          <button className="secondary-button" type="submit">
+            Sign out
+          </button>
+        </form>
+      </header>
+
+      <DashboardClient data={dashboardData} />
+    </main>
   );
 }

@@ -1,36 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { registerUser } from "@/app/actions/register";
+import { useActionState } from "react";
+import { authenticate } from "@/app/actions/authenticate";
 
-export default function RegisterPage() {
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
-  const router = useRouter();
+const initialState = { error: "" };
 
-  async function handleSubmit(formData: FormData) {
-    setPending(true);
-    setError(null);
-    setSuccess(null);
-
-    const result = await registerUser(formData);
-
-    if (result.error) {
-      setError(result.error);
-      setPending(false);
-      return;
-    }
-
-    if (result.success) {
-      setSuccess(result.success);
-      setTimeout(() => {
-        router.push("/login");
-      }, 1200);
-    }
-  }
+export default function LoginPage() {
+  const [state, formAction, pending] = useActionState(
+    authenticate,
+    initialState,
+  );
 
   return (
     <main className="auth-shell">
@@ -54,11 +34,11 @@ export default function RegisterPage() {
                 backgroundClip: "text",
               }}
             >
-              Start your shared finance workspace.
+              Your shared finances, simplified.
             </h2>
             <p className="mt-4 max-w-sm text-sm leading-7 text-[var(--muted)]">
-              Create groups, add expenses, and see exactly who owes whom — with
-              wallet-based settlements powered by Stripe. No more chasing payments.
+              Track group expenses, settle balances instantly, and fund your
+              wallet through Stripe — all from one clean dashboard.
             </p>
           </div>
 
@@ -69,13 +49,11 @@ export default function RegisterPage() {
                 style={{ background: "rgba(0, 212, 170, 0.12)" }}
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 2L2 7l10 5 10-5-10-5z" />
-                  <path d="M2 17l10 5 10-5" />
-                  <path d="M2 12l10 5 10-5" />
+                  <polyline points="20 6 9 17 4 12" />
                 </svg>
               </div>
               <span className="text-sm text-[var(--muted)]">
-                Wallet + group dashboard ready instantly
+                Split expenses in real-time
               </span>
             </div>
             <div className="flex items-center gap-3">
@@ -84,14 +62,11 @@ export default function RegisterPage() {
                 style={{ background: "rgba(0, 212, 170, 0.12)" }}
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-                  <circle cx="9" cy="7" r="4" />
-                  <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-                  <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                  <polyline points="20 6 9 17 4 12" />
                 </svg>
               </div>
               <span className="text-sm text-[var(--muted)]">
-                Invite friends by code or email
+                Minimum-transaction settlements
               </span>
             </div>
             <div className="flex items-center gap-3">
@@ -100,70 +75,47 @@ export default function RegisterPage() {
                 style={{ background: "rgba(0, 212, 170, 0.12)" }}
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="1" y="4" width="22" height="16" rx="2" ry="2" />
-                  <line x1="1" y1="10" x2="23" y2="10" />
+                  <polyline points="20 6 9 17 4 12" />
                 </svg>
               </div>
               <span className="text-sm text-[var(--muted)]">
-                Category-wise analytics from day one
+                Stripe-powered wallet
               </span>
             </div>
           </div>
         </div>
       </aside>
 
-      {/* Registration form */}
+      {/* Auth form */}
       <div className="auth-main">
         <section className="auth-card">
           <div style={{ animation: "fadeInUp 0.5s ease-out" }}>
             <p className="text-xs font-bold uppercase tracking-[0.32em] text-[var(--accent)]">
-              Get started
+              Welcome back
             </p>
             <h1 className="mt-3 text-3xl font-bold tracking-[-0.04em] text-[var(--text-strong)]">
-              Create your workspace
+              Log in to your workspace
             </h1>
             <p className="mt-3 text-sm leading-7 text-[var(--muted)]">
-              We&#39;ll prepare your wallet and a default group so you can start
-              splitting expenses immediately.
+              Enter your credentials to manage balances, add expenses, and launch
+              Stripe-powered wallet top-ups.
             </p>
           </div>
 
           <form
-            action={handleSubmit}
+            action={formAction}
             className="mt-8 space-y-5"
             style={{ animation: "fadeInUp 0.5s ease-out 0.15s both" }}
           >
             <div className="field">
-              <label htmlFor="name">Full name</label>
-              <input
-                id="name"
-                name="name"
-                type="text"
-                placeholder="Aarav Mehta"
-              />
-            </div>
-            <div className="field">
               <label htmlFor="email">Email</label>
-              <input
-                id="email"
-                name="email"
-                type="email"
-                placeholder="aarav@example.com"
-                required
-              />
+              <input id="email" name="email" type="email" placeholder="you@example.com" required />
             </div>
             <div className="field">
               <label htmlFor="password">Password</label>
-              <input
-                id="password"
-                name="password"
-                type="password"
-                placeholder="••••••••"
-                required
-              />
+              <input id="password" name="password" type="password" placeholder="••••••••" required />
             </div>
-            {error ? <p className="form-error">{error}</p> : null}
-            {success ? <p className="form-success">{success}</p> : null}
+            {state.error ? <p className="form-error">{state.error}</p> : null}
             <button
               className="primary-button w-full justify-center"
               disabled={pending}
@@ -172,10 +124,10 @@ export default function RegisterPage() {
               {pending ? (
                 <>
                   <span className="spinner" />
-                  Creating…
+                  Signing in…
                 </>
               ) : (
-                "Create account"
+                "Log in"
               )}
             </button>
           </form>
@@ -184,12 +136,12 @@ export default function RegisterPage() {
             className="mt-6 text-center text-sm text-[var(--muted)]"
             style={{ animation: "fadeIn 0.5s ease-out 0.3s both" }}
           >
-            Already registered?{" "}
+            Need an account?{" "}
             <Link
               className="font-semibold text-[var(--accent)] underline decoration-[var(--accent)]/30 underline-offset-4 transition-colors hover:text-[var(--accent)]"
-              href="/login"
+              href="/register"
             >
-              Log in
+              Create one
             </Link>
           </p>
         </section>

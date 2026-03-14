@@ -14,7 +14,7 @@ export default auth((req) => {
   // If user is already logged in and visits login/register
   if (isAuthRoute) {
     if (isLoggedIn) {
-      return NextResponse.redirect(new URL("/dashboard", req.nextUrl));
+      return NextResponse.redirect(new URL("/", req.nextUrl));
     }
 
     return NextResponse.next();

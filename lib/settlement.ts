@@ -16,6 +16,11 @@ export async function computeSettlements(
     include: { splits: true },
   });
 
+  // 1b. Fetch all completed settlements for the group
+  const settlements = await prisma.settlement.findMany({
+    where: { groupId, status: "COMPLETED" },
+  });
+
   // 2. Calculate the Net Balance for each user
   // Positive balance = Creditor (They are owed money)
   // Negative balance = Debtor (They owe money)
@@ -30,6 +35,14 @@ export async function computeSettlements(
     for (const split of expense.splits) {
       balances[split.userId] = (balances[split.userId] || 0) - split.amount;
     }
+  }
+
+  // 2b. Subtract completed settlements from balances
+  // Sender paid money → reduce their debt (increase balance)
+  // Receiver got money → reduce their credit (decrease balance)
+  for (const settlement of settlements) {
+    balances[settlement.fromId] = (balances[settlement.fromId] || 0) + settlement.amount;
+    balances[settlement.toId] = (balances[settlement.toId] || 0) - settlement.amount;
   }
 
   // 3. Separate users into Debtors and Creditors

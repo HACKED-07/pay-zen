@@ -74,6 +74,7 @@ model WalletTransaction {
   walletId    String
   amount      Float // Positive for credit (+), negative for debit (-)
   type        WalletTxType
+  description String? // Human-readable context, e.g. "Sent to Kalp shah"
   referenceId String? // Stripe Session ID, or the Settlement ID
   createdAt   DateTime     @default(now())
 
@@ -101,6 +102,7 @@ model Group {
   id          String   @id @default(cuid())
   name        String
   description String?
+  inviteCode  String?  @unique
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -129,11 +131,22 @@ model Expense {
   date        DateTime    @default(now())
   groupId     String
   payerId     String // The user who paid the bill 
+  category    ExpenseCategory @default(OTHER)
   splitMethod SplitMethod @default(EQUAL) // EQUAL, PERCENT, CUSTOM 
 
   group  Group          @relation(fields: [groupId], references: [id], onDelete: Cascade)
   payer  User           @relation("PaidBy", fields: [payerId], references: [id])
   splits ExpenseSplit[]
+}
+
+enum ExpenseCategory {
+  FOOD
+  TRANSPORT
+  STAY
+  ENTERTAINMENT
+  UTILITIES
+  SHOPPING
+  OTHER
 }
 
 enum SplitMethod {

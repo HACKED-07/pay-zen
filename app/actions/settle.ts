@@ -22,6 +22,17 @@ export async function executeWalletSettlement({
   if (amount <= 0) return { error: "Invalid amount" };
 
   try {
+    // Resolve user names for descriptions
+    const [fromUser, toUser, group] = await Promise.all([
+      prisma.user.findUnique({ where: { id: fromUserId }, select: { name: true, email: true } }),
+      prisma.user.findUnique({ where: { id: toUserId }, select: { name: true, email: true } }),
+      prisma.group.findUnique({ where: { id: groupId }, select: { name: true } }),
+    ]);
+
+    const fromName = fromUser?.name || fromUser?.email || "Unknown";
+    const toName = toUser?.name || toUser?.email || "Unknown";
+    const groupName = group?.name || "group";
+
     const result = await prisma.$transaction(async (tx) => {
       // 1. Lock/Fetch both wallets
       const senderWallet = await tx.wallet.findUnique({
@@ -33,14 +44,14 @@ export async function executeWalletSettlement({
 
       if (!senderWallet || senderWallet.balance < amount) {
         throw new Error(
-          "Insufficient wallet balance. Please add funds via Stripe.",
+          `Insufficient balance. You have ₹${senderWallet?.balance?.toFixed(2) ?? "0.00"} but need ₹${amount.toFixed(2)}. Add funds first.`,
         );
       }
       if (!receiverWallet) {
         throw new Error("Receiver does not have an active wallet.");
       }
 
-      // 2. Create the Settlement Record (from your existing schema)
+      // 2. Create the Settlement Record
       const settlement = await tx.settlement.create({
         data: {
           groupId,
@@ -62,6 +73,7 @@ export async function executeWalletSettlement({
           walletId: senderWallet.id,
           amount: -Math.abs(amount),
           type: "SETTLEMENT_SENT",
+          description: `Sent to ${toName} · ${groupName} pre-settlement`,
           referenceId: settlement.id,
         },
       });
@@ -76,6 +88,7 @@ export async function executeWalletSettlement({
           walletId: receiverWallet.id,
           amount: Math.abs(amount),
           type: "SETTLEMENT_RECEIVED",
+          description: `Received from ${fromName} · ${groupName} pre-settlement`,
           referenceId: settlement.id,
         },
       });
@@ -84,8 +97,13 @@ export async function executeWalletSettlement({
     });
 
     return { success: true, settlementId: result.id };
-  } catch (error: any) {
+  } catch (error) {
     console.error("Settlement execution failed:", error);
-    return { error: error.message || "Failed to execute settlement." };
+    return {
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to execute settlement.",
+    };
   }
 }
