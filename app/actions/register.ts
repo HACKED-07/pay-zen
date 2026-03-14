@@ -2,7 +2,7 @@
 
 import { prisma } from "@/lib/prisma";
 import { generateInviteCode } from "@/lib/group";
-import bcrypt from "bcryptjs";
+import bcrypt from "bcrypt";
 
 export async function registerUser(formData: FormData) {
   const name = formData.get("name") as string;
