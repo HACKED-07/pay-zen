@@ -72,6 +72,8 @@ export async function getDashboardData(userId: string) {
     throw new Error("User not found.");
   }
 
+  const stripeAccountSetupComplete = user.stripeAccountSetupComplete ?? false;
+
   const hasStripe = Boolean(
     process.env.STRIPE_SECRET_KEY &&
       process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
@@ -298,6 +300,7 @@ export async function getDashboardData(userId: string) {
     userName: fallbackName(user.name, user.email, user.id),
     walletBalance: roundCurrency(user.wallet?.balance ?? 0),
     hasStripe,
+    stripeAccountSetupComplete,
     initialGroupId,
     groups,
     walletTransactions:

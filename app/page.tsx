@@ -22,20 +22,18 @@ export default async function Home() {
   }
 
   return (
-    <main className="page-shell">
-      <header className="desk-header">
-        <div className="desk-header__identity">
-          <div className="desk-header__seal">
+    <main className="min-h-screen w-full bg-[#fdfdf9] text-black">
+      {/* Header matching the new minimal desk aesthetic */}
+      <header className="flex justify-between items-center px-6 py-4 border-b border-[#e0e0e0] bg-white sticky top-0 z-50">
+        <div className="flex items-center gap-4">
+          <div className="w-10 h-10 rounded-full bg-[#D4F670] flex items-center justify-center font-bold text-lg border-2 border-black">
             {dashboardData.userName.charAt(0).toUpperCase()}
           </div>
           <div>
-            <p className="desk-header__eyebrow">Studio Desk</p>
-            <h1 className="desk-header__title">
+            <p className="text-xs font-bold tracking-widest text-gray-500 uppercase">Studio Desk</p>
+            <h1 className="text-xl font-bold tracking-tight">
               {dashboardData.userName.split(" ")[0]}&apos;s sketchboard
             </h1>
-            <p className="desk-header__subtitle">
-              Shared spending, notes, settlements, and group decisions in one paper trail.
-            </p>
           </div>
         </div>
 
@@ -45,13 +43,15 @@ export default async function Home() {
             await signOut({ redirectTo: "/" });
           }}
         >
-          <button className="secondary-button desk-header__signout" type="submit">
+          <button className="px-4 py-2 text-sm font-semibold rounded-full border border-black hover:bg-gray-100 transition-colors" type="submit">
             Leave desk
           </button>
         </form>
       </header>
 
-      <DashboardClient data={dashboardData} />
+      <div className="p-4 md:p-8 max-w-7xl mx-auto">
+        <DashboardClient data={dashboardData} />
+      </div>
     </main>
   );
 }

@@ -2,129 +2,68 @@
 
 import Link from "next/link";
 import { motion } from "framer-motion";
-import {
-  FadeIn,
-  ScaleIn,
-  SlideUp,
-  StaggerContainer,
-} from "@/components/motion-wrapper";
-
-const launchCards = [
-  {
-    title: "Sketch every split",
-    body: "Drop in bills, voice notes, or quick templates and keep the full group context visible.",
-  },
-  {
-    title: "Settle without chasing",
-    body: "See the cleanest payment path, pre-settle from wallets, and stop the back-and-forth.",
-  },
-  {
-    title: "Keep the side notes",
-    body: "Budgets, invites, whiteboard notes, and AI help all stay attached to the same board.",
-  },
-];
+import { FadeIn, SlideUp, StaggerContainer } from "@/components/motion-wrapper";
 
 export function LandingHero() {
   return (
-    <main className="poster-shell">
-      <div className="poster-shell__wash" />
+    <main className="relative min-h-screen w-full bg-[#fdfdf9] text-black overflow-hidden flex flex-col items-center pt-24 pb-12">
+      {/* Giant Lime Green Circle Background */}
+      <div className="absolute top-[-20vh] left-1/2 transform -translate-x-1/2 w-[120vw] h-[120vw] max-w-[1200px] max-h-[1200px] bg-[#D4F670] rounded-full -z-10 shadow-[inset_0_-10px_30px_rgba(0,0,0,0.02)]" />
+
+      {/* Header / Nav */}
+      <header className="absolute top-0 left-0 w-full flex justify-between items-center p-8 md:px-16">
+        <div className="flex items-center gap-2 font-bold text-lg tracking-tight">
+          <div className="w-4 h-4 rounded-full bg-black"></div>
+          <div className="w-0 h-0 border-l-[8px] border-r-[8px] border-b-[14px] border-l-transparent border-r-transparent border-b-black"></div>
+          <span className="ml-2">PayZen</span>
+        </div>
+        <div className="flex flex-col gap-[6px] w-8 cursor-pointer">
+          <div className="w-full h-[2px] bg-black"></div>
+          <div className="w-2/3 h-[2px] bg-black"></div>
+        </div>
+      </header>
+
+      {/* Main Content Area */}
       <StaggerContainer
-        className="poster-grid"
-        delayChildren={0.08}
-        staggerChildren={0.12}
+        className="w-full max-w-5xl mx-auto flex flex-col items-center justify-center text-center mt-20 px-6 relative"
+        delayChildren={0.1}
+        staggerChildren={0.15}
       >
-        <section className="poster-copy">
-          <SlideUp>
-            <div className="scribble-badge">Shared money, drawn clearly</div>
-          </SlideUp>
+        <SlideUp>
+          <div className="text-sm font-semibold tracking-wide uppercase mb-6 relative inline-block">
+            <span className="absolute -left-12 -top-6 text-xs rotate-[-15deg] font-bold">DRAW! <br/>↓</span>
+            Shared money, drawn clearly
+          </div>
+        </SlideUp>
 
-          <SlideUp>
-            <h1 className="poster-title">
-              Shared expenses on a sketchboard, not a spreadsheet.
-            </h1>
-          </SlideUp>
+        <SlideUp>
+          <h1 className="text-6xl md:text-[5.5rem] font-bold tracking-tighter leading-[0.9] max-w-4xl relative">
+            Become a part
+            <br />
+            of the board
+            <span className="absolute -right-8 top-1/2 text-2xl">✦</span>
+          </h1>
+          {/* Hand drawn squiggle imitation */}
+          <div className="w-full flex justify-center mt-4">
+            <svg width="180" height="20" viewBox="0 0 180 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M2 12C30 -4 60 22 90 12C120 2 150 22 178 12" stroke="black" strokeWidth="3" strokeLinecap="round"/>
+            </svg>
+          </div>
+        </SlideUp>
 
-          <SlideUp>
-            <p className="poster-text">
-              PayZen turns group finance into a warm, readable workspace: expenses,
-              settlements, wallets, notes, and insights all live on one illustrated
-              board.
+        <div className="w-full flex flex-col md:flex-row justify-between items-end mt-24 md:mt-32 relative">
+          <SlideUp className="text-left max-w-[280px]">
+            <p className="text-sm font-medium leading-relaxed">
+              PayZen turns group finance into a warm workspace: expenses, settlements, and notes all on one board.
             </p>
           </SlideUp>
 
-          <SlideUp className="poster-actions">
-            <Link href="/register" className="primary-button poster-button">
-              Start a new board
-            </Link>
-            <Link href="/login" className="secondary-button poster-button">
-              Enter existing board
+          <SlideUp className="mt-12 md:mt-0">
+            <Link href="/register" className="inline-flex items-center justify-center w-32 h-32 rounded-full border border-black hover:bg-black hover:text-[#D4F670] transition-colors relative group">
+              <span className="text-sm font-medium">Start a board<br/><span className="group-hover:translate-y-1 block transition-transform mt-2">↓</span></span>
             </Link>
           </SlideUp>
-
-          <FadeIn delay={0.35} className="poster-checklist">
-            <div>
-              <strong>Groups</strong>
-              <span>Invite, join, and manage circles without hunting through menus.</span>
-            </div>
-            <div>
-              <strong>Wallet</strong>
-              <span>Top up once, settle quickly, and keep the money trail attached.</span>
-            </div>
-            <div>
-              <strong>Insights</strong>
-              <span>Track categories, monthly drift, and who is carrying the spend.</span>
-            </div>
-          </FadeIn>
-        </section>
-
-        <ScaleIn delay={0.2} className="poster-canvas">
-          <div className="poster-canvas__sheet">
-            <div className="poster-canvas__headline">
-              <p>Trip board</p>
-              <span>vector notebook preview</span>
-            </div>
-
-            <div className="poster-ledger">
-              <div>
-                <span>Stay</span>
-                <strong>₹18,400</strong>
-              </div>
-              <div>
-                <span>Food</span>
-                <strong>₹7,250</strong>
-              </div>
-              <div>
-                <span>To settle</span>
-                <strong>3 steps</strong>
-              </div>
-            </div>
-
-            <div className="poster-sketch">
-              <svg viewBox="0 0 280 160" aria-hidden="true">
-                <path d="M18 124 C52 86, 96 84, 132 110 S216 142, 258 52" />
-                <path d="M20 136 L20 32 L260 32" />
-                <circle cx="72" cy="102" r="5" />
-                <circle cx="148" cy="92" r="5" />
-                <circle cx="222" cy="72" r="5" />
-              </svg>
-            </div>
-
-            <div className="poster-sticky-grid">
-              {launchCards.map((card, index) => (
-                <motion.article
-                  key={card.title}
-                  className="poster-sticky"
-                  initial={{ opacity: 0, y: 18, rotate: 0 }}
-                  animate={{ opacity: 1, y: 0, rotate: index === 1 ? -2 : index === 2 ? 2 : -1 }}
-                  transition={{ delay: 0.2 + index * 0.08, duration: 0.35 }}
-                >
-                  <h2>{card.title}</h2>
-                  <p>{card.body}</p>
-                </motion.article>
-              ))}
-            </div>
-          </div>
-        </ScaleIn>
+        </div>
       </StaggerContainer>
     </main>
   );
