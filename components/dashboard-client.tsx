@@ -2,10 +2,12 @@
 
 import { useState, useTransition, useRef, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { motion, AnimatePresence } from "framer-motion";
+import { StaggerContainer, SlideUp, FadeIn } from "@/components/motion-wrapper";
 import { ExpenseCategory, SplitMethod } from "@/generated/prisma/enums";
-import { addExpense } from "@/app/actions/expenses";
+import { addExpense, editExpense, deleteExpense } from "@/app/actions/expenses";
 import { addMemberToGroup } from "@/app/actions/groups";
-import { createGroup, joinGroup } from "@/app/actions/group-workspace";
+import { createGroup, joinGroup, exitGroup } from "@/app/actions/group-workspace";
 import { executeWalletSettlement } from "@/app/actions/settle";
 import { scanBill } from "@/app/actions/scan-bill";
 import { parseVoiceExpense } from "@/app/actions/parse-voice";
@@ -20,7 +22,8 @@ type SectionKey =
   | "settlements"
   | "activity"
   | "analytics"
-  | "whiteboard";
+  | "whiteboard"
+  | "templates";
 
 type WalletTransaction = {
   id: string;
@@ -46,6 +49,8 @@ type ExpenseItem = {
   payerId: string;
   payerName: string;
   category: ExpenseCategory;
+  splitMethod: SplitMethod;
+  splits: { userId: string; amount: number; percentage: number | null }[];
 };
 
 type SettlementItem = {
@@ -210,16 +215,27 @@ const sectionIcons: Record<SectionKey, () => React.JSX.Element> = {
   activity: IconActivity,
   analytics: IconAnalytics,
   whiteboard: IconWhiteboard,
+  templates: () => (
+    <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="3" width="7" height="7" rx="1" />
+      <rect x="14" y="3" width="7" height="7" rx="1" />
+      <rect x="3" y="14" width="7" height="7" rx="1" />
+      <line x1="14" y1="17.5" x2="21" y2="17.5" />
+      <line x1="17.5" y1="14" x2="17.5" y2="21" />
+    </svg>
+  ),
 };
 
-const sections: { key: SectionKey; label: string; subtitle: string }[] = [
-  { key: "dashboard", label: "Dashboard", subtitle: "Command center" },
-  { key: "groups", label: "Groups", subtitle: "Squads & ledgers" },
-  { key: "settlements", label: "Settlements", subtitle: "Clear your debts" },
-  { key: "activity", label: "Activity", subtitle: "The paper trail" },
-  { key: "analytics", label: "Analytics", subtitle: "Follow the money" },
-  { key: "whiteboard", label: "Whiteboard", subtitle: "Group notes" },
+const allSectionDefs = [
+  { key: "dashboard" as const, label: "Dashboard", subtitle: "Command center" },
+  { key: "groups" as const, label: "Groups", subtitle: "Squads & ledgers" },
+  { key: "settlements" as const, label: "Settlements", subtitle: "Clear your debts" },
+  { key: "activity" as const, label: "Activity", subtitle: "The paper trail" },
+  { key: "analytics" as const, label: "Analytics", subtitle: "Follow the money" },
+  { key: "whiteboard" as const, label: "Whiteboard", subtitle: "Group notes" },
+  { key: "templates" as const, label: "Templates", subtitle: "Quick add" },
 ];
+const sections: { key: SectionKey; label: string; subtitle: string }[] = allSectionDefs;
 
 const splitMethodOptions: { key: SplitMethod; label: string }[] = [
   { key: "EQUAL", label: "Equal" },
@@ -238,12 +254,13 @@ const chartColors = [
   "#00d4aa",
 ];
 
-function formatCurrency(amount: number) {
-  return new Intl.NumberFormat("en-IN", {
+function formatCurrency(amount: number, currencyCode = "INR", rate = 1) {
+  const converted = amount * rate;
+  return new Intl.NumberFormat(currencyCode === "INR" ? "en-IN" : "en-US", {
     style: "currency",
-    currency: "INR",
-    maximumFractionDigits: 2,
-  }).format(amount);
+    currency: currencyCode,
+    maximumFractionDigits: 0,
+  }).format(converted);
 }
 
 /* Stripe uses server-side Checkout — no client SDK script needed */
@@ -257,7 +274,7 @@ function groupInitials(name: string) {
 }
 
 /* ─── Charts ─── */
-function PieChart({ items }: { items: AnalyticsItem[] }) {
+function PieChart({ items, currencyCode = "INR", rate = 1 }: { items: AnalyticsItem[], currencyCode?: string, rate?: number }) {
   const total = items.reduce((sum, item) => sum + item.amount, 0);
   const segments = items.reduce<
     { path: string; color: string; item: AnalyticsItem; angle: number }[]
@@ -309,7 +326,7 @@ function PieChart({ items }: { items: AnalyticsItem[] }) {
               <strong className="text-[var(--text-strong)] text-sm">
                 {item.category.replaceAll("_", " ")}
               </strong>
-              <p>{formatCurrency(item.amount)}</p>
+              <p>{formatCurrency(item.amount, currencyCode, rate)}</p>
             </div>
           </div>
         ))}
@@ -318,7 +335,7 @@ function PieChart({ items }: { items: AnalyticsItem[] }) {
   );
 }
 
-function LineChart({ points }: { points: AnalyticsPoint[] }) {
+function LineChart({ points, currencyCode = "INR", rate = 1 }: { points: AnalyticsPoint[], currencyCode?: string, rate?: number }) {
   const width = 420;
   const height = 220;
   const max = Math.max(...points.map((point) => point.amount), 1);
@@ -399,7 +416,7 @@ function LineChart({ points }: { points: AnalyticsPoint[] }) {
   );
 }
 
-function BarChart({ items }: { items: TopSpender[] }) {
+function BarChart({ items, currencyCode = "INR", rate = 1 }: { items: TopSpender[], currencyCode?: string, rate?: number }) {
   const max = Math.max(...items.map((item) => item.amount), 1);
 
   return (
@@ -411,7 +428,7 @@ function BarChart({ items }: { items: TopSpender[] }) {
             style={{ height: `${(item.amount / max) * 100}%` }}
           />
           <p>{item.name}</p>
-          <strong>{formatCurrency(item.amount)}</strong>
+          <strong>{formatCurrency(item.amount, currencyCode, rate)}</strong>
         </div>
       ))}
     </div>
@@ -421,9 +438,13 @@ function BarChart({ items }: { items: TopSpender[] }) {
 function MoneyFlowDiagram({
   suggestions,
   focusedUserId,
+  currencyCode = "INR",
+  rate = 1,
 }: {
   suggestions: Suggestion[];
   focusedUserId: string;
+  currencyCode?: string;
+  rate?: number;
 }) {
   const related = suggestions.filter(
     (suggestion) =>
@@ -452,7 +473,7 @@ function MoneyFlowDiagram({
             <strong className="text-[var(--text-strong)]">{transaction.fromName}</strong>
           </div>
           <div className="money-arrow">
-            <span>{formatCurrency(transaction.amount)}</span>
+            <span>{formatCurrency(transaction.amount, currencyCode, rate)}</span>
           </div>
           <div className="money-node money-node--accent">
             <span>{groupInitials(transaction.toName)}</span>
@@ -488,6 +509,17 @@ export function DashboardClient({ data }: { data: DashboardData }) {
   const [splitMethod, setSplitMethod] = useState<SplitMethod>("EQUAL");
   const [splitValues, setSplitValues] = useState<Record<string, string>>({});
   const [settleState, setSettleState] = useState({ toUserId: "", amount: "" });
+  // ── Custom templates state ──
+  const DEFAULT_TEMPLATES = [
+    { id: "rent", label: "🏠 Rent", description: "Monthly Rent", amount: "10000", category: ExpenseCategory.UTILITIES },
+    { id: "netflix", label: "🎬 Netflix", description: "Netflix Subscription", amount: "649", category: ExpenseCategory.FOOD },
+    { id: "lunch", label: "🍱 Lunch", description: "Office Lunch", amount: "200", category: ExpenseCategory.FOOD },
+  ];
+  const [customTemplates, setCustomTemplates] = useState<{ id: string; label: string; description: string; amount: string; category: ExpenseCategory }[]>([]);
+  const [newTemplateName, setNewTemplateName] = useState("");
+  const [newTemplateAmount, setNewTemplateAmount] = useState("");
+  const [newTemplateCategory, setNewTemplateCategory] = useState<ExpenseCategory>(ExpenseCategory.OTHER);
+  const allTemplates = [...DEFAULT_TEMPLATES, ...customTemplates];
   // ── New feature state ──
   const [noteText, setNoteText] = useState("");
   const [notes, setNotes] = useState<{ id: string; content: string; authorId: string; createdAt: string }[]>([]);
@@ -511,6 +543,30 @@ export function DashboardClient({ data }: { data: DashboardData }) {
     setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 3500);
   }, []);
   const [pending, startTransition] = useTransition();
+  const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null);
+
+  // ── Currency state ──
+  const [currencyCode, setCurrencyCode] = useState("INR");
+  const [exchangeRate, setExchangeRate] = useState(1);
+
+  useEffect(() => {
+    if (currencyCode === "INR") {
+      setExchangeRate(1);
+      return;
+    }
+    fetch(`https://api.exchangerate-api.com/v4/latest/INR`)
+      .then((res) => res.json())
+      .then((resData) => {
+        if (resData && resData.rates && resData.rates[currencyCode]) {
+          setExchangeRate(resData.rates[currencyCode]);
+        }
+      })
+      .catch((err) => console.error("Currency fetch error:", err));
+  }, [currencyCode]);
+
+  const displayCurrency = useCallback((amount: number) => {
+    return formatCurrency(amount, currencyCode, exchangeRate);
+  }, [currencyCode, exchangeRate]);
 
   const activeGroup =
     data.groups.find((group) => group.id === selectedGroupId) ?? data.groups[0] ?? null;
@@ -567,6 +623,72 @@ export function DashboardClient({ data }: { data: DashboardData }) {
       setNotes((prev) => prev.filter((n) => n.id !== noteId));
     });
   }
+
+  const handleDeleteExpense = async (expenseId: string) => {
+    if (!confirm("Are you sure you want to delete this expense?")) return;
+    startTransition(async () => {
+      const res = await deleteExpense({ expenseId });
+      if (res.error) showToast(res.error, "error");
+      else {
+        showToast(res.success ?? "Transaction deleted.", "success");
+        router.refresh();
+      }
+    });
+  };
+
+  const handleExitGroup = async (groupId: string) => {
+    if (!confirm("Are you sure you want to leave this group?")) return;
+    startTransition(async () => {
+      try {
+        const res = await exitGroup({ groupId });
+        if (res.error) {
+          showToast(res.error, "error");
+        } else {
+          showToast(res.success ?? "Left the group.", "success");
+          if (data.groups.length > 1) {
+            const mainGroup = data.groups.find(g => g.id !== groupId) ?? data.groups[0];
+            setSelectedGroupId(mainGroup.id);
+          } else {
+            setSelectedGroupId(null);
+          }
+          router.refresh();
+        }
+      } catch (e) {
+        showToast("Could not exit group. You may have unsettled debts.", "error");
+        console.error(e);
+      }
+    });
+  };
+
+  const handleEditExpenseClicked = (expenseId: string) => {
+    const expenseToEdit = activeGroup?.expenses.find(e => e.id === expenseId);
+    if (!expenseToEdit) return;
+
+    setEditingExpenseId(expenseToEdit.id);
+    setExpenseState({
+      description: expenseToEdit.description,
+      amount: expenseToEdit.amount.toString(),
+      payerId: expenseToEdit.payerId,
+      category: expenseToEdit.category,
+    });
+    setSplitMethod(expenseToEdit.splitMethod as SplitMethod);
+    
+    const newSplitValues: Record<string, string> = {};
+    expenseToEdit.splits.forEach(s => {
+      if (expenseToEdit.splitMethod === "PERCENT" && s.percentage !== null) {
+        newSplitValues[s.userId] = s.percentage.toString();
+      } else if (expenseToEdit.splitMethod === "CUSTOM") {
+        newSplitValues[s.userId] = s.amount.toString();
+      }
+    });
+    setSplitValues(newSplitValues);
+    setSection("dashboard");
+    
+    const involvedUsers = new Set(expenseToEdit.splits.map(s => s.userId));
+    setSelectedMembers(involvedUsers);
+    
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
   async function handleChat(msg?: string) {
     const text = msg || chatInput.trim();
@@ -668,7 +790,7 @@ export function DashboardClient({ data }: { data: DashboardData }) {
         value: splitMethod === "EQUAL" ? undefined : Number(splitValues[member.id] || 0),
       }));
 
-      const result = await addExpense({
+      const payload = {
         groupId: activeGroup.id,
         description: expenseState.description,
         amount: Number(expenseState.amount),
@@ -676,7 +798,11 @@ export function DashboardClient({ data }: { data: DashboardData }) {
         category: expenseState.category,
         splitMethod,
         participants,
-      });
+      };
+
+      const result = editingExpenseId
+        ? await editExpense(editingExpenseId, payload)
+        : await addExpense(payload);
 
       if (result.error) {
         showToast(result.error, "error");
@@ -691,7 +817,8 @@ export function DashboardClient({ data }: { data: DashboardData }) {
       });
       setSplitMethod("EQUAL");
       setSplitValues({});
-      showToast("Expense locked in.", "success");
+      setEditingExpenseId(null);
+      showToast(editingExpenseId ? "Expense updated." : "Expense locked in.", "success");
       router.refresh();
     });
   }
@@ -932,10 +1059,10 @@ export function DashboardClient({ data }: { data: DashboardData }) {
   }
 
   const overviewCards = [
-    { label: "Wallet balance", value: formatCurrency(data.walletBalance), accent: true },
+    { label: "Wallet balance", value: displayCurrency(data.walletBalance), accent: true },
     {
       label: "Active group spend",
-      value: formatCurrency(activeGroup?.totalExpenseAmount ?? 0),
+      value: displayCurrency(activeGroup?.totalExpenseAmount ?? 0),
       accent: false,
     },
     { label: "Groups joined", value: String(data.groups.length), accent: false },
@@ -962,23 +1089,35 @@ export function DashboardClient({ data }: { data: DashboardData }) {
         </div>
 
         <nav className="sidebar-nav">
-          {sections.map((item) => {
-            const Icon = sectionIcons[item.key];
-            return (
-              <button
-                key={item.key}
-                className={`sidebar-link ${section === item.key ? "sidebar-link--active" : ""}`}
-                onClick={() => setSection(item.key)}
-                type="button"
-              >
-                <Icon />
-                <div>
-                  <strong>{item.label}</strong>
-                  <span>{item.subtitle}</span>
-                </div>
-              </button>
-            );
-          })}
+          <AnimatePresence>
+            {sections.map((item) => {
+              const Icon = sectionIcons[item.key];
+              const isActive = section === item.key;
+              return (
+                <button
+                  key={item.key}
+                  className={`sidebar-link relative ${isActive ? "text-[var(--text-strong)]" : ""}`}
+                  onClick={() => setSection(item.key)}
+                  type="button"
+                >
+                  {isActive && (
+                    <motion.div
+                      layoutId="sidebarActiveTab"
+                      className="absolute inset-0 rounded-[var(--radius-md)] bg-[var(--surface-hover)] border border-[var(--glass-border)]"
+                      transition={{ type: "spring", stiffness: 300, damping: 25 }}
+                    />
+                  )}
+                  <div className="relative z-10 flex items-center gap-3">
+                    <Icon />
+                    <div>
+                      <strong>{item.label}</strong>
+                      <span>{item.subtitle}</span>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </AnimatePresence>
         </nav>
 
         <div className="sidebar-groups">
@@ -1003,9 +1142,26 @@ export function DashboardClient({ data }: { data: DashboardData }) {
             ))}
           </div>
         </div>
+
+        {/* Currency selector at bottom of sidebar */}
+        <div className="px-2 pt-2 pb-1">
+          <p className="sidebar-eyebrow mb-2">Display currency</p>
+          <select
+            value={currencyCode}
+            onChange={e => setCurrencyCode(e.target.value)}
+            className="w-full text-xs font-bold uppercase tracking-wider bg-[var(--surface-hover)] border border-[var(--glass-border)] text-[var(--text-strong)] px-3 py-2 rounded-xl outline-none cursor-pointer hover:border-[var(--accent)] transition-colors"
+          >
+            <option value="INR">INR ₹</option>
+            <option value="USD">USD $</option>
+            <option value="EUR">EUR €</option>
+            <option value="GBP">GBP £</option>
+            <option value="JPY">JPY ¥</option>
+            <option value="AED">AED د.إ</option>
+          </select>
+        </div>
       </aside>
 
-      <section className="workspace-main">
+      <section className="workspace-main" style={{ position: "relative" }}>
         {/* Toast Container */}
         <div className="toast-container">
           {toasts.map((toast) => (
@@ -1027,16 +1183,15 @@ export function DashboardClient({ data }: { data: DashboardData }) {
                   <line x1="22" y1="11" x2="16" y2="11" />
                 </svg>
               </div>
-              <h2 className="onboarding-cta__title">Launch your first squad</h2>
+              <h2 className="onboarding-cta__title">Your Groups</h2>
               <p className="onboarding-cta__text">
-                Groups are how PayZen operates. Create one to start splitting bills,
-                settling debts from your wallet, and watching the numbers — or jump into an existing group with an invite code.
+                Create a new group or join one with an invite code to start tracking expenses.
               </p>
             </div>
             <div className="onboarding-forms">
               <div className="onboarding-form-card">
-                <h3>New squad</h3>
-                <p>Spin up a fresh ledger for your crew, trip, or flat</p>
+                <h3>Create New</h3>
+                <p>Start a new shared ledger.</p>
                 <div className="space-y-3">
                   <div className="field">
                     <label htmlFor="ob-name">Group name</label>
@@ -1062,8 +1217,8 @@ export function DashboardClient({ data }: { data: DashboardData }) {
                 </div>
               </div>
               <div className="onboarding-form-card">
-                <h3>Got a code?</h3>
-                <p>Paste an invite code to drop into an existing group</p>
+                <h3>Join Group</h3>
+                <p>Enter an invite code.</p>
                 <div className="space-y-3">
                   <div className="field">
                     <label htmlFor="ob-code">Invite code</label>
@@ -1105,15 +1260,13 @@ export function DashboardClient({ data }: { data: DashboardData }) {
                 <p className="workspace-hero__eyebrow">{currentSection.label}</p>
                 <h2 className="workspace-hero__title">
                   {currentSection.label === "Dashboard"
-                    ? `Run ${activeGroup?.name ?? "your finances"} like a machine.`
-                    : `${currentSection.label} — no loose ends.`}
+                    ? activeGroup?.name ?? "No group selected"
+                    : currentSection.label}
                 </h2>
                 <p className="workspace-hero__text">
-                  {currentSection.subtitle}. {activeGroup
-                    ? `${activeGroup.members.length} members, ${formatCurrency(
-                        activeGroup.totalExpenseAmount,
-                      )} tracked, invite code ${activeGroup.inviteCode}.`
-                    : "Select a group from the sidebar."}
+                  {activeGroup
+                    ? `${activeGroup.members.length} members · ${displayCurrency(activeGroup.totalExpenseAmount)} total`
+                    : "Select a group to view details."}
                 </p>
               </div>
               <div className="workspace-hero__stats">
@@ -1129,6 +1282,16 @@ export function DashboardClient({ data }: { data: DashboardData }) {
                   <span>Due to settle</span>
                   <strong>{activeGroup?.suggestions.length ?? 0} txns</strong>
                 </div>
+                <div className="workspace-hero__stat mt-auto pt-2 hidden sm:block">
+                  <button onClick={() => activeGroup && handleExitGroup(activeGroup.id)} className="text-xs font-bold text-[var(--danger)] hover:underline opacity-80 hover:opacity-100 transition-opacity uppercase tracking-wider">
+                    Exit Group
+                  </button>
+                </div>
+              </div>
+              <div className="workspace-hero__actions mt-3 sm:hidden px-6 pb-2">
+                 <button onClick={() => activeGroup && handleExitGroup(activeGroup.id)} className="text-xs font-bold text-[var(--danger)] hover:underline opacity-80 hover:opacity-100 transition-opacity uppercase tracking-wider">
+                    Exit Group
+                 </button>
               </div>
             </section>
 
@@ -1145,17 +1308,18 @@ export function DashboardClient({ data }: { data: DashboardData }) {
           </>
         )}
 
-        {data.groups.length > 0 && section === "dashboard" ? (
-          <div className="section-animate grid gap-6 xl:grid-cols-[1fr_1fr]">
-            <article className="panel panel--soft space-y-6">
+        <AnimatePresence mode="popLayout">
+          {data.groups.length > 0 && section === "dashboard" ? (
+            <StaggerContainer key="dashboard" className="grid gap-6 xl:grid-cols-[1fr_1fr] w-full">
+              <SlideUp className="panel panel--soft space-y-6">
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <p className="eyebrow">Current group</p>
-                  <h2 className="mt-2 text-2xl font-bold tracking-[-0.04em] text-[var(--text-strong)]">
+                  <h2 className="text-xl font-bold tracking-tight text-[var(--text-strong)] flex items-center gap-2">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-[var(--accent)]"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
                     {activeGroup?.name ?? "No group selected"}
                   </h2>
-                  <p className="mt-2 text-sm leading-7 text-[var(--muted)]">
-                    {activeGroup?.description ?? "Create or join a group to begin."}
+                  <p className="mt-1 text-sm text-[var(--muted)]">
+                    {activeGroup?.description ?? "Create or join a group."}
                   </p>
                 </div>
                 {activeGroup ? (
@@ -1184,25 +1348,25 @@ export function DashboardClient({ data }: { data: DashboardData }) {
                           }
                         >
                           {member.netBalance >= 0 ? "+" : ""}
-                          {formatCurrency(member.netBalance)}
+                          {displayCurrency(member.netBalance)}
                         </strong>
                       </div>
                       <div>
                         <span>Paid</span>
-                        <strong className="text-[var(--text-strong)]">{formatCurrency(member.totalPaid)}</strong>
+                        <strong className="text-[var(--text-strong)]">{displayCurrency(member.totalPaid)}</strong>
                       </div>
                     </div>
                   </div>
                 ))}
               </div>
-            </article>
+              </SlideUp>
 
-            <div className="space-y-6">
-              <article className="panel panel--dark-accent">
-                <div className="mb-5">
-                  <p className="eyebrow">Wallet funding</p>
-                  <h2 className="mt-2 text-xl font-bold tracking-[-0.04em]">
-                    Fund your wallet
+              <StaggerContainer staggerChildren={0.1} delayChildren={0.1} className="space-y-6">
+                <SlideUp className="panel panel--dark-accent">
+                <div className="mb-5 border-b border-[var(--glass-border)] pb-3">
+                  <h2 className="text-lg font-bold tracking-tight flex items-center gap-2">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-[var(--accent)]"><path d="M20 12V8H6a2 2 0 0 1-2-2c0-1.1.9-2 2-2h12v4"></path><path d="M4 6v12c0 1.1.9 2 2 2h14v-4"></path><path d="M18 12a2 2 0 0 0-2 2c0 1.1.9 2 2 2h4v-4h-4z"></path></svg>
+                    Top Up
                   </h2>
                 </div>
                 <div className="space-y-4">
@@ -1227,14 +1391,27 @@ export function DashboardClient({ data }: { data: DashboardData }) {
                     {pending ? <><span className="spinner" /> Processing…</> : "Top up via Stripe"}
                   </button>
                 </div>
-              </article>
+              </SlideUp>
 
-              <article className="panel panel--soft">
-                <div className="mb-5">
-                  <p className="eyebrow">Log an expense</p>
-                  <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-[var(--text-strong)]">
-                    Drop a bill on the group
+              <SlideUp className="panel panel--soft">
+                <div className="mb-5 border-b border-[var(--glass-border)] pb-3">
+                  <h2 className="text-lg font-bold tracking-tight text-[var(--text-strong)] flex items-center gap-2">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-[var(--accent)]"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                    New Expense
                   </h2>
+                </div>
+
+                {/* ── Quick Templates ── */}
+                <div className="mb-4 flex flex-wrap gap-2">
+                  <button type="button" onClick={() => setExpenseState(s => ({ ...s, description: "Monthly Rent", category: ExpenseCategory.STAY }))} className="px-3 py-1.5 text-xs font-semibold rounded-full bg-[var(--surface-hover)] border border-[var(--glass-border)] text-[var(--accent)] hover:bg-[var(--accent)] hover:text-black transition-all hover:-translate-y-0.5 shadow-[var(--shadow-sm)]">
+                    🏠 Rent
+                  </button>
+                  <button type="button" onClick={() => setExpenseState(s => ({ ...s, description: "Netflix", category: ExpenseCategory.ENTERTAINMENT }))} className="px-3 py-1.5 text-xs font-semibold rounded-full bg-[var(--surface-hover)] border border-[var(--glass-border)] text-[#e50914] hover:bg-[#e50914] hover:text-white transition-all hover:-translate-y-0.5 shadow-[var(--shadow-sm)]">
+                    🍿 Netflix
+                  </button>
+                  <button type="button" onClick={() => setExpenseState(s => ({ ...s, description: "Office Lunch", category: ExpenseCategory.FOOD }))} className="px-3 py-1.5 text-xs font-semibold rounded-full bg-[var(--surface-hover)] border border-[var(--glass-border)] text-[#f5a623] hover:bg-[#f5a623] hover:text-black transition-all hover:-translate-y-0.5 shadow-[var(--shadow-sm)]">
+                    🍱 Lunch
+                  </button>
                 </div>
 
                 {/* Scan + Voice input */}
@@ -1466,7 +1643,7 @@ export function DashboardClient({ data }: { data: DashboardData }) {
                   ) : null}
 
                   <button
-                    className="secondary-button w-full justify-center"
+                    className="secondary-button w-full justify-center relative overflow-hidden group"
                     disabled={pending || !activeGroup || selectedMembers.size === 0}
                     onClick={submitExpense}
                     type="button"
@@ -1474,21 +1651,35 @@ export function DashboardClient({ data }: { data: DashboardData }) {
                     {pending ? (
                       <>
                         <span className="spinner" />
-                        Logging…
+                        Processing…
                       </>
                     ) : (
-                      splitMethod === "EQUAL" ? "Split equally" : splitMethod === "PERCENT" ? "Split by percentage" : "Split by exact amounts"
+                      editingExpenseId ? "Update Expense" : (splitMethod === "EQUAL" ? "Split equally" : splitMethod === "PERCENT" ? "Split by percentage" : "Split by exact amounts")
                     )}
                   </button>
+                  {editingExpenseId && (
+                    <button 
+                      className="mt-3 text-xs font-bold uppercase tracking-wider text-[var(--muted)] hover:text-[var(--danger)] text-center w-full block outline-none transition-colors" 
+                      onClick={() => {
+                        setEditingExpenseId(null);
+                        setExpenseState({ description: "", amount: "", payerId: data.userId, category: ExpenseCategory.OTHER });
+                        setSplitMethod("EQUAL");
+                        setSplitValues({});
+                        setSelectedMembers(new Set(members.map(m => m.id)));
+                      }}
+                    >
+                       Cancel Edit
+                    </button>
+                  )}
                 </div>
-              </article>
-            </div>
-          </div>
-        ) : null}
+                </SlideUp>
+              </StaggerContainer>
+            </StaggerContainer>
+          ) : null}
 
-        {data.groups.length > 0 && section === "groups" ? (
-          <div className="section-animate grid gap-6 xl:grid-cols-[1fr_1fr]">
-            <article className="panel panel--soft space-y-5">
+          {data.groups.length > 0 && section === "groups" ? (
+            <StaggerContainer key="groups" className="grid gap-6 xl:grid-cols-[1fr_1fr] w-full">
+              <SlideUp className="panel panel--soft space-y-5">
               <div>
                 <p className="eyebrow">Spin up a group</p>
                 <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-[var(--text-strong)]">
@@ -1533,9 +1724,9 @@ export function DashboardClient({ data }: { data: DashboardData }) {
                   "Create group"
                 )}
               </button>
-            </article>
+              </SlideUp>
 
-            <article className="panel panel--soft space-y-5">
+              <SlideUp className="panel panel--soft space-y-5">
               <div>
                 <p className="eyebrow">Got an invite?</p>
                 <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-[var(--text-strong)]">
@@ -1594,9 +1785,9 @@ export function DashboardClient({ data }: { data: DashboardData }) {
                   </div>
                 </>
               ) : null}
-            </article>
+              </SlideUp>
 
-            <article className="panel panel--soft xl:col-span-2">
+              <SlideUp className="panel panel--soft xl:col-span-2">
               <div className="mb-5">
                 <p className="eyebrow">Your squads</p>
                 <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-[var(--text-strong)]">
@@ -1617,14 +1808,14 @@ export function DashboardClient({ data }: { data: DashboardData }) {
                   </div>
                 ))}
               </div>
-            </article>
-          </div>
-        ) : null}
+              </SlideUp>
+            </StaggerContainer>
+          ) : null}
 
-        {data.groups.length > 0 && section === "settlements" ? (
-          <div className="section-animate grid gap-6 xl:grid-cols-[1fr_0.92fr]">
-            <div className="space-y-6">
-              <article className="panel panel--soft">
+          {data.groups.length > 0 && section === "settlements" ? (
+            <StaggerContainer key="settlements" className="grid gap-6 xl:grid-cols-[1fr_0.92fr] w-full">
+              <StaggerContainer staggerChildren={0.1} className="space-y-6">
+                <SlideUp className="panel panel--soft">
                 <div className="mb-5">
                   <p className="eyebrow">Optimized settlements</p>
                   <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-[var(--text-strong)]">
@@ -1642,7 +1833,7 @@ export function DashboardClient({ data }: { data: DashboardData }) {
                           <p>Minimum-path settlement.</p>
                         </div>
                         <div className="flex items-center gap-3">
-                          <strong className="text-[var(--accent)]">{formatCurrency(suggestion.amount)}</strong>
+                          <strong className="text-[var(--accent)]">{displayCurrency(suggestion.amount)}</strong>
                           {suggestion.fromUserId === data.userId ? (
                             <button
                               className="primary-button"
@@ -1669,10 +1860,10 @@ export function DashboardClient({ data }: { data: DashboardData }) {
                     </div>
                   )}
                 </div>
-              </article>
+                </SlideUp>
 
-              {/* Pre-settlement card */}
-              <article className="panel panel--dark-accent">
+                {/* Pre-settlement card */}
+                <SlideUp className="panel panel--dark-accent">
                 <div className="mb-5">
                   <p className="eyebrow">Pre-settle</p>
                   <h2 className="mt-2 text-xl font-bold tracking-[-0.04em]">
@@ -1680,7 +1871,7 @@ export function DashboardClient({ data }: { data: DashboardData }) {
                   </h2>
                   <p className="mt-1 text-xs text-[var(--muted)]">
                     Send money now — it gets deducted from future debts.
-                    Wallet: <strong className="text-[var(--accent)]">{formatCurrency(data.walletBalance)}</strong>
+                    Wallet: <strong className="text-[var(--accent)]">{displayCurrency(data.walletBalance)}</strong>
                   </p>
                 </div>
                 <div className="space-y-4">
@@ -1718,10 +1909,10 @@ export function DashboardClient({ data }: { data: DashboardData }) {
                     {pending ? <><span className="spinner" /> Sending…</> : "Pre-settle from wallet"}
                   </button>
                 </div>
-              </article>
-            </div>
+                </SlideUp>
+              </StaggerContainer>
 
-            <article className="panel panel--soft space-y-5">
+              <SlideUp className="panel panel--soft space-y-5">
               <div>
                 <p className="eyebrow">Money flow</p>
                 <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-[var(--text-strong)]">
@@ -1743,6 +1934,8 @@ export function DashboardClient({ data }: { data: DashboardData }) {
               <MoneyFlowDiagram
                 focusedUserId={focusedExplainability?.userId ?? data.userId}
                 suggestions={activeGroup?.moneyFlow.transactions ?? []}
+                currencyCode={currencyCode}
+                rate={exchangeRate}
               />
               <div className="space-y-3">
                 {(focusedExplainability?.owes ?? []).length ? (
@@ -1752,7 +1945,7 @@ export function DashboardClient({ data }: { data: DashboardData }) {
                         Owes {item.counterpartyName} for {item.description}
                       </strong>
                       <p>
-                        {formatCurrency(item.amount)} on{" "}
+                        {displayCurrency(item.amount)} on{" "}
                         {new Date(item.date).toLocaleDateString("en-IN")}
                       </p>
                     </div>
@@ -1763,12 +1956,13 @@ export function DashboardClient({ data }: { data: DashboardData }) {
                   </div>
                 )}
               </div>
-            </article>
-          </div>
-        ) : null}
+              </SlideUp>
+            </StaggerContainer>
+          ) : null}
 
-        {data.groups.length > 0 && section === "activity" ? (
-          <article className="section-animate panel panel--soft">
+          {data.groups.length > 0 && section === "activity" ? (
+            <StaggerContainer key="activity" className="w-full">
+              <SlideUp className="panel panel--soft">
             <div className="mb-5">
               <p className="eyebrow">The feed</p>
               <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-[var(--text-strong)]">
@@ -1784,7 +1978,13 @@ export function DashboardClient({ data }: { data: DashboardData }) {
                       <strong className="text-[var(--text-strong)]">{item.title}</strong>
                       <p>{item.description}</p>
                     </div>
-                    <time>{new Date(item.createdAt).toLocaleDateString("en-IN")}</time>
+                    <div className="flex flex-col items-end gap-1">
+                      <time className="text-xs text-[var(--muted)]">{new Date(item.createdAt).toLocaleDateString("en-IN")}</time>
+                      <div className="flex gap-2">
+                        <button onClick={() => handleEditExpenseClicked(item.id)} className="text-xs text-[var(--accent)] hover:underline">Edit</button>
+                        <button onClick={() => handleDeleteExpense(item.id)} className="text-xs text-[var(--danger)] hover:underline">Delete</button>
+                      </div>
+                    </div>
                   </div>
                 ))
               ) : (
@@ -1796,22 +1996,23 @@ export function DashboardClient({ data }: { data: DashboardData }) {
                 </div>
               )}
             </div>
-          </article>
+            </SlideUp>
+          </StaggerContainer>
         ) : null}
 
-        {data.groups.length > 0 && section === "analytics" ? (
-          <div className="section-animate analytics-layout">
-            <article className="panel analytics-panel analytics-panel--dark">
+          {data.groups.length > 0 && section === "analytics" ? (
+            <StaggerContainer key="analytics" className="analytics-layout w-full">
+              <SlideUp className="panel analytics-panel analytics-panel--dark">
               <div className="mb-5">
                 <p className="eyebrow">Spending by category</p>
                 <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-[var(--text-strong)]">
                   Where the money bleeds
                 </h2>
               </div>
-              <PieChart items={activeGroup?.analytics.byCategory ?? []} />
-            </article>
+              <PieChart items={activeGroup?.analytics.byCategory ?? []} currencyCode={currencyCode} rate={exchangeRate} />
+              </SlideUp>
 
-            <article className="panel analytics-panel analytics-panel--dark">
+              <SlideUp className="panel analytics-panel analytics-panel--dark" delay={0.1}>
               <div className="mb-5">
                 <p className="eyebrow">Monthly expenses</p>
                 <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-[var(--text-strong)]">
@@ -1824,56 +2025,165 @@ export function DashboardClient({ data }: { data: DashboardData }) {
                     ? activeGroup.analytics.monthly
                     : [{ label: "Now", amount: 0 }]
                 }
+                currencyCode={currencyCode}
+                rate={exchangeRate}
               />
-            </article>
+              </SlideUp>
 
-            <article className="panel analytics-panel analytics-panel--dark analytics-panel--wide">
+              <SlideUp className="panel analytics-panel analytics-panel--dark analytics-panel--wide" delay={0.2}>
               <div className="mb-5">
                 <p className="eyebrow">Top spenders</p>
                 <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-[var(--text-strong)]">
                   The big spenders
                 </h2>
               </div>
-              <BarChart items={activeGroup?.analytics.topSpenders ?? []} />
-            </article>
-          </div>
-        ) : null}
+              <BarChart items={activeGroup?.analytics.topSpenders ?? []} currencyCode={currencyCode} rate={exchangeRate} />
+              </SlideUp>
+            </StaggerContainer>
+          ) : null}
 
-        {data.groups.length > 0 ? (
-        <article className="panel panel--soft">
-          <div className="mb-5">
-            <p className="eyebrow">Wallet log</p>
-            <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-[var(--text-strong)]">
-              Your money trail
-            </h2>
-          </div>
-          <div className="table-list">
-            {data.walletTransactions.length ? (
-              data.walletTransactions.map((transaction) => (
-                <div className="table-row" key={transaction.id}>
-                  <div>
-                    <strong>{transaction.description || transaction.type.replaceAll("_", " ")}</strong>
-                    <p className="text-xs text-[var(--muted)]">{new Date(transaction.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</p>
+          {data.groups.length > 0 && (section === "dashboard" || section === "whiteboard") ? (
+          <article className="panel panel--soft">
+            <div className="mb-5">
+              <p className="eyebrow">Wallet log</p>
+              <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-[var(--text-strong)]">
+                Your money trail
+              </h2>
+            </div>
+            <div className="table-list">
+              {data.walletTransactions.length ? (
+                data.walletTransactions.map((transaction) => (
+                  <div className="table-row" key={transaction.id}>
+                    <div>
+                      <strong>{transaction.description || transaction.type.replaceAll("_", " ")}</strong>
+                      <p className="text-xs text-[var(--muted)]">{new Date(transaction.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</p>
+                    </div>
+                    <strong className={transaction.amount >= 0 ? "text-[var(--success)]" : "text-[var(--danger)]"}>{transaction.amount >= 0 ? "+" : ""}{displayCurrency(transaction.amount)}</strong>
                   </div>
-                  <strong className={transaction.amount >= 0 ? "text-[var(--success)]" : "text-[var(--danger)]"}>{transaction.amount >= 0 ? "+" : ""}{formatCurrency(transaction.amount)}</strong>
+                ))
+              ) : (
+                <div className="empty-state">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ margin: "0 auto 0.5rem" }}>
+                    <rect x="1" y="4" width="22" height="16" rx="2" ry="2" />
+                    <line x1="1" y1="10" x2="23" y2="10" />
+                  </svg>
+                  Wallet is empty. Add some funds to get rolling.
                 </div>
-              ))
-            ) : (
-              <div className="empty-state">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ margin: "0 auto 0.5rem" }}>
-                  <rect x="1" y="4" width="22" height="16" rx="2" ry="2" />
-                  <line x1="1" y1="10" x2="23" y2="10" />
-                </svg>
-                Wallet is empty. Add some funds to get rolling.
-              </div>
-            )}
-          </div>
-        </article>
-        ) : null}
+              )}
+            </div>
+          </article>
+          ) : null}
+
+        {/* ── Templates Section ── */}
+          {section === "templates" ? (
+            <StaggerContainer key="templates" className="w-full">
+              <SlideUp className="panel panel--soft">
+                <div className="mb-5">
+                  <p className="eyebrow">Quick-add templates</p>
+                  <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-[var(--text-strong)]">Expense Templates</h2>
+                  <p className="text-sm text-[var(--muted)] mt-1">Apply a template to instantly fill the expense form.</p>
+                </div>
+
+                <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 mb-6">
+                  {allTemplates.map(t => (
+                    <div
+                      key={t.id}
+                      className="relative group flex flex-col gap-2 p-4 rounded-[var(--radius-lg)] border border-[var(--glass-border)] bg-[var(--surface)] hover:border-[var(--accent)] hover:bg-[var(--surface-hover)] transition-all cursor-pointer"
+                      onClick={() => {
+                        setExpenseState(s => ({ ...s, description: t.description, amount: t.amount, category: t.category }));
+                        setSection("dashboard");
+                        showToast(`Template applied.`, "success");
+                      }}
+                    >
+                      <span className="text-2xl leading-none">{t.label.split(" ")[0]}</span>
+                      <div>
+                        <strong className="text-sm text-[var(--text-strong)] block">{t.label.replace(/^\S+\s/, "")}</strong>
+                        <p className="text-xs text-[var(--muted)]">{formatCurrency(Number(t.amount), currencyCode, exchangeRate)}</p>
+                      </div>
+                      {t.id.startsWith("custom-") && (
+                        <button
+                          type="button"
+                          className="absolute top-1 right-2 text-xs text-[var(--danger)] opacity-0 group-hover:opacity-100 transition-opacity"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setCustomTemplates(prev => prev.filter(c => c.id !== t.id));
+                            showToast("Template deleted.", "info");
+                          }}
+                        >
+                          &times;
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="divider" />
+
+                <div className="space-y-3 mt-4">
+                  <p className="eyebrow">Create custom template</p>
+                  <div className="field">
+                    <label className="label">Template name</label>
+                    <input
+                      value={newTemplateName}
+                      onChange={e => setNewTemplateName(e.target.value)}
+                      placeholder="e.g. Team Pizza"
+                      className="input"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="field">
+                      <label className="label">Amount</label>
+                      <input
+                        inputMode="decimal"
+                        value={newTemplateAmount}
+                        onChange={e => setNewTemplateAmount(e.target.value)}
+                        placeholder="500"
+                        className="input"
+                      />
+                    </div>
+                    <div className="field">
+                      <label className="label">Category</label>
+                      <select
+                        value={newTemplateCategory}
+                        onChange={e => setNewTemplateCategory(e.target.value as ExpenseCategory)}
+                        className="input select"
+                      >
+                        {categoryOptions.map(c => (
+                          <option key={c} value={c}>{c.replaceAll("_", " ")}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="primary-button w-full"
+                    disabled={!newTemplateName.trim() || !newTemplateAmount}
+                    onClick={() => {
+                      if (!newTemplateName.trim() || !newTemplateAmount) return;
+                      setCustomTemplates(prev => [...prev, {
+                        id: `custom-${Date.now()}`,
+                        label: newTemplateName.trim(),
+                        description: newTemplateName.replace(/^\S+\s/, "").trim() || newTemplateName.trim(),
+                        amount: newTemplateAmount,
+                        category: newTemplateCategory,
+                      }]);
+                      setNewTemplateName("");
+                      setNewTemplateAmount("");
+                      setNewTemplateCategory(ExpenseCategory.OTHER);
+                      showToast("Custom template saved!", "success");
+                    }}
+                  >
+                    Save Template
+                  </button>
+                </div>
+              </SlideUp>
+            </StaggerContainer>
+          ) : null}
 
         {/* ── Whiteboard Section ── */}
-        {data.groups.length > 0 && section === "whiteboard" ? (
-          <article className="section-animate panel panel--soft space-y-5">
+          {data.groups.length > 0 && section === "whiteboard" ? (
+            <StaggerContainer key="whiteboard" className="w-full">
+              <SlideUp className="panel panel--soft space-y-5">
             <div className="mb-3">
               <p className="eyebrow">Whiteboard</p>
               <h2 className="mt-2 text-xl font-bold tracking-[-0.04em] text-[var(--text-strong)]">Group Notes</h2>
@@ -1888,6 +2198,25 @@ export function DashboardClient({ data }: { data: DashboardData }) {
                   {inviteLink ? "Regenerate" : "Generate"}
                 </button>
               </div>
+              {inviteLink && (
+                <div className="mt-3 flex items-center gap-4">
+                  <div
+                    className="bg-white p-2 rounded-lg shadow border border-[var(--glass-border)] cursor-pointer hover:shadow-md transition-shadow shrink-0"
+                    onClick={() => navigator.clipboard.writeText(inviteLink)}
+                    title="Click to copy link"
+                  >
+                    <img
+                      src={`https://api.qrserver.com/v1/create-qr-code/?size=110x110&data=${encodeURIComponent(inviteLink)}`}
+                      alt="Invite QR Code"
+                      className="w-[90px] h-[90px] block"
+                    />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs text-[var(--muted)] break-all leading-relaxed">{inviteLink}</p>
+                    <button type="button" className="mt-2 text-xs text-[var(--accent)] hover:underline" onClick={() => navigator.clipboard.writeText(inviteLink)}>Copy link</button>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="divider" />
@@ -1936,72 +2265,119 @@ export function DashboardClient({ data }: { data: DashboardData }) {
                 ))
               )}
             </div>
-          </article>
+            </SlideUp>
+          </StaggerContainer>
         ) : null}
+        </AnimatePresence>
 
         {/* ── AI Chatbot FAB + Drawer ── */}
         {data.groups.length > 0 && (
           <>
-            <button className="chat-fab" onClick={() => setChatOpen(!chatOpen)} type="button" aria-label="AI Chat">
+            <motion.button 
+              className="chat-fab" 
+              onClick={() => setChatOpen(!chatOpen)} 
+              type="button" 
+              aria-label="AI Chat"
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              initial={{ scale: 0, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              transition={{ type: "spring", stiffness: 400, damping: 25, delay: 0.5 }}
+            >
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
               </svg>
-            </button>
+            </motion.button>
 
-            {chatOpen && (
-              <div className="chat-drawer">
-                <div className="chat-drawer__header">
-                  <h3>PayZen AI</h3>
-                  <button className="chat-drawer__close" onClick={() => setChatOpen(false)} type="button">&times;</button>
-                </div>
-                <div className="chat-quick-prompts">
-                  <button onClick={() => handleChat("Analyze my spending")} type="button">Analyze spending</button>
-                  <button onClick={() => handleChat("How can I save money?")} type="button">How to save?</button>
-                  <button onClick={() => handleChat("What is my biggest expense?")} type="button">Biggest expense?</button>
-                </div>
-                <div className="chat-messages">
-                  {chatMessages.length === 0 && (
-                    <div className="chat-msg chat-msg--ai">Hi! I&apos;m your PayZen financial advisor. Ask me about your spending patterns, savings strategies, or budget insights.</div>
-                  )}
-                  {chatMessages.map((msg, i) => (
-                    <div key={i} className={`chat-msg chat-msg--${msg.role === "user" ? "user" : "ai"}`}>
-                      {msg.text}
-                    </div>
-                  ))}
-                  {chatPending && <div className="chat-msg chat-msg--ai"><span className="spinner" /> Thinking...</div>}
-                  <div ref={chatEndRef} />
-                </div>
-                <div className="chat-input-row">
-                  <input
-                    value={chatInput}
-                    onChange={(e) => setChatInput(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleChat()}
-                    placeholder="Ask about your finances..."
-                  />
-                  <button onClick={() => handleChat()} disabled={chatPending || !chatInput.trim()} type="button">Send</button>
-                </div>
-              </div>
-            )}
+            <AnimatePresence>
+              {chatOpen && (
+                <motion.div 
+                  className="chat-drawer"
+                  initial={{ opacity: 0, y: 40, scale: 0.96, filter: "blur(4px)" }}
+                  animate={{ opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }}
+                  exit={{ opacity: 0, y: 20, scale: 0.96, filter: "blur(4px)" }}
+                  transition={{ type: "spring", stiffness: 350, damping: 25 }}
+                >
+                  <div className="chat-drawer__header">
+                    <h3>PayZen AI</h3>
+                    <button className="chat-drawer__close" onClick={() => setChatOpen(false)} type="button">&times;</button>
+                  </div>
+                  <div className="chat-quick-prompts">
+                    <button onClick={() => handleChat("Analyze my spending")} type="button">Analyze spending</button>
+                    <button onClick={() => handleChat("How can I save money?")} type="button">How to save?</button>
+                  </div>
+                  <div className="chat-messages">
+                    {chatMessages.length === 0 && (
+                      <div className="chat-msg chat-msg--ai">Hi! I&apos;m your PayZen financial advisor. Ask me about your spending patterns, savings strategies, or budget insights.</div>
+                    )}
+                    <AnimatePresence initial={false}>
+                      {chatMessages.map((msg, i) => (
+                        <motion.div 
+                          key={i} 
+                          className={`chat-msg chat-msg--${msg.role === "user" ? "user" : "ai"}`}
+                          initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                          animate={{ opacity: 1, y: 0, scale: 1 }}
+                          transition={{ type: "spring", stiffness: 400, damping: 30 }}
+                        >
+                          {msg.text}
+                        </motion.div>
+                      ))}
+                      {chatPending && (
+                        <motion.div 
+                          className="chat-msg chat-msg--ai"
+                          initial={{ opacity: 0, scale: 0.9 }}
+                          animate={{ opacity: 1, scale: 1 }}
+                        >
+                          <span className="spinner" /> Thinking...
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                    <div ref={chatEndRef} />
+                  </div>
+                  <div className="chat-input-row">
+                    <input
+                      value={chatInput}
+                      onChange={(e) => setChatInput(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && handleChat()}
+                      placeholder="Ask about your finances..."
+                    />
+                    <button onClick={() => handleChat()} disabled={chatPending || !chatInput.trim()} type="button">Send</button>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </>
         )}
       </section>
 
       {/* ── Mobile Bottom Nav ── */}
       <nav className="mobile-nav">
-        {sections.slice(0, 5).map((item) => {
-          const Icon = sectionIcons[item.key];
-          return (
-            <button
-              key={item.key}
-              className={`mobile-nav__btn ${section === item.key ? "mobile-nav__btn--active" : ""}`}
-              onClick={() => setSection(item.key)}
-              type="button"
-            >
-              <Icon />
-              {item.label}
-            </button>
-          );
-        })}
+        <AnimatePresence>
+          {sections.slice(0, 5).map((item) => {
+            const Icon = sectionIcons[item.key];
+            const isActive = section === item.key;
+            return (
+              <button
+                key={item.key}
+                className={`mobile-nav__btn relative ${isActive ? "text-[var(--accent)]" : "text-[var(--muted)]"}`}
+                onClick={() => setSection(item.key)}
+                type="button"
+              >
+                {isActive && (
+                  <motion.div
+                    layoutId="mobileActiveTab"
+                    className="absolute inset-0 -z-10 bg-[var(--surface-strong)] rounded-full"
+                    transition={{ type: "spring", stiffness: 300, damping: 25 }}
+                  />
+                )}
+                <div className="relative z-10 flex flex-col items-center">
+                  <Icon />
+                  <span className="text-[10px] sm:text-xs mt-1">{item.label}</span>
+                </div>
+              </button>
+            );
+          })}
+        </AnimatePresence>
       </nav>
     </div>
   );

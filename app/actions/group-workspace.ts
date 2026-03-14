@@ -76,3 +76,32 @@ export async function joinGroup({
 
   return { success: `Joined ${group.name}.`, groupId: group.id };
 }
+
+export async function exitGroup({ groupId }: { groupId: string }) {
+  const session = await auth();
+  if (!session?.user?.id) return { error: "Unauthorized." };
+
+  try {
+    await prisma.groupMember.delete({
+      where: {
+        groupId_userId: {
+          userId: session.user.id,
+          groupId,
+        },
+      },
+    });
+
+    // Check if group is empty now
+    const membersCount = await prisma.groupMember.count({
+      where: { groupId },
+    });
+
+    if (membersCount === 0) {
+      await prisma.group.delete({ where: { id: groupId } });
+    }
+
+    return { success: "Left the group." };
+  } catch (err) {
+    return { error: "Failed to leave the group. Make sure you are a member." };
+  }
+}

@@ -209,6 +209,12 @@ export async function getDashboardData(userId: string) {
             expense.payerId,
           ),
           category: expense.category,
+          splitMethod: expense.splitMethod,
+          splits: expense.splits.map(s => ({
+            userId: s.userId,
+            amount: s.amount,
+            percentage: s.percentage,
+          })),
         })),
         settlements: group.settlements.map((settlement) => ({
           id: settlement.id,
